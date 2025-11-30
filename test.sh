@@ -54,10 +54,10 @@ run_backend_tests() {
     fi
     
     # Run pytest if test files exist
-    if find backend -name "*_test.py" -o -name "test_*.py" 2>/dev/null | grep -q .; then
-        python -m pytest backend/ -v || EXIT_CODE=1
+    if find backend/tests -name "test_*.py" 2>/dev/null | grep -q .; then
+        python -m pytest backend/tests/ -v --tb=short || EXIT_CODE=1
     else
-        echo -e "${YELLOW}No test files found in backend/${NC}"
+        echo -e "${YELLOW}No test files found in backend/tests/${NC}"
     fi
     
     deactivate
