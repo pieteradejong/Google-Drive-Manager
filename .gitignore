@@ -205,3 +205,36 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Google Drive Manager - Project specific
+# OAuth credentials and tokens (sensitive)
+credentials.json
+token.json
+*.json.token
+
+# Environment variables (already covered by .env above, but being explicit)
+.env.local
+.env.*.local
+
+# Frontend build outputs
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/node_modules/
+
+# Log files
+*.log
+logs/
+/tmp/
+
+# OS-specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Documentation PDFs (optional - uncomment if you don't want to track PDFs)
+# *.pdf
