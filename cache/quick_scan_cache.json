@@ -1,279 +1,30 @@
 {
   "data": {
     "overview": {
-      "total_quota": "2203318222848",
-      "used": "143631583657",
-      "used_in_drive": "61066730096",
-      "user_email": "pieter.a.dejong@gmail.com",
-      "user_display_name": "Pieter"
+      "total_quota": "1000000000",
+      "used": "500000000",
+      "used_in_drive": "400000000",
+      "user_email": "test@example.com",
+      "user_display_name": "Test User"
     },
     "top_folders": [
       {
-        "id": "15Iw-Cm1oOXBihObxY7aWpDHmTn62kArT",
-        "name": "Billie Eilish Miami 2025",
+        "id": "folder1",
+        "name": "My Folder",
         "mimeType": "application/vnd.google-apps.folder",
         "size": null,
         "calculatedSize": 0,
-        "createdTime": "2025-10-13T04:59:17.322Z",
-        "modifiedTime": "2025-10-13T23:37:45.103Z",
-        "webViewLink": "https://drive.google.com/drive/folders/15Iw-Cm1oOXBihObxY7aWpDHmTn62kArT",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "1Y524L01mAYZDaIdCL9FNXvlHghko7vAC",
-        "name": "Billie Eilizh ",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2025-10-13T04:58:52.121Z",
-        "modifiedTime": "2025-10-13T04:58:52.121Z",
-        "webViewLink": "https://drive.google.com/drive/folders/1Y524L01mAYZDaIdCL9FNXvlHghko7vAC",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "1Ijf8JcNQxoEEo148DUyCnPUJEpQsuSHY",
-        "name": "Saved from Chrome",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2025-02-26T03:43:33.093Z",
-        "modifiedTime": "2025-02-26T03:43:33.093Z",
-        "webViewLink": "https://drive.google.com/drive/folders/1Ijf8JcNQxoEEo148DUyCnPUJEpQsuSHY",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "1ITZu1ib5cLctY-1nh74FTjr9cZoZyhSJ",
-        "name": "wrp",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2024-10-25T13:29:57.710Z",
-        "modifiedTime": "2024-10-25T13:29:57.710Z",
-        "webViewLink": "https://drive.google.com/drive/folders/1ITZu1ib5cLctY-1nh74FTjr9cZoZyhSJ",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "15PU1-YG5IP7qDJHGIS7CJSHARD0izLdD",
-        "name": "God and Spirituality",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2023-10-28T00:29:21.274Z",
-        "modifiedTime": "2023-10-28T00:29:21.274Z",
-        "webViewLink": "https://drive.google.com/drive/folders/15PU1-YG5IP7qDJHGIS7CJSHARD0izLdD",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "1Wg5yuGaeB38XdgJs_ndynpI8r9h7xFsj",
-        "name": "Adam Townsend",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2023-07-09T15:26:57.532Z",
-        "modifiedTime": "2023-07-09T15:26:57.532Z",
-        "webViewLink": "https://drive.google.com/drive/folders/1Wg5yuGaeB38XdgJs_ndynpI8r9h7xFsj",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "1oCNYJ0KYqfFcv2VSRqltOpcppC8dUg7L",
-        "name": "People",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2023-02-27T21:43:42.747Z",
-        "modifiedTime": "2023-02-27T21:43:42.747Z",
-        "webViewLink": "https://drive.google.com/drive/folders/1oCNYJ0KYqfFcv2VSRqltOpcppC8dUg7L",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "1F8G58fu9epWSjP_1p-vyiWWBgEt-gFJd",
-        "name": "Places",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2020-09-02T17:07:35.069Z",
-        "modifiedTime": "2020-09-02T17:07:35.069Z",
-        "webViewLink": "https://drive.google.com/drive/folders/1F8G58fu9epWSjP_1p-vyiWWBgEt-gFJd",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1QUZpTEFQTHJEb2s",
-        "name": "Personal",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2014-12-27T08:00:24.801Z",
-        "modifiedTime": "2020-03-06T19:45:22.916Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1QUZpTEFQTHJEb2s?resourcekey=0-8m92Y9jI9RI_0IGwRnFyQw",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1flBNWTVZZGFmNDVsek5xR1NhYW10TEdnWlN6Z3dLU3VrQ2pTc3g1MW5oeUU",
-        "name": "Media",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2015-08-28T21:15:26.418Z",
-        "modifiedTime": "2017-09-25T06:06:58.963Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1flBNWTVZZGFmNDVsek5xR1NhYW10TEdnWlN6Z3dLU3VrQ2pTc3g1MW5oeUU?resourcekey=0-VEbpmVdMGxFy6-ncdHWetg",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1b3NGRDNFQmVEZVk",
-        "name": "Auto Call Recorder",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2017-08-24T04:21:32.486Z",
-        "modifiedTime": "2017-08-24T04:21:32.486Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1b3NGRDNFQmVEZVk?resourcekey=0-oWc-f94k-Q6NQ3GVE7bWhg",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1NnpoS3lCVk9aOVE",
-        "name": "Nexus 5X SMS Backup ",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2017-01-23T06:29:21.110Z",
-        "modifiedTime": "2017-01-23T06:29:21.110Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1NnpoS3lCVk9aOVE?resourcekey=0-jCpLhIh2GiueHv2FVJCU2g",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1eFg1RnQxZG9pM2c",
-        "name": "Travel",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2014-06-11T19:49:29.131Z",
-        "modifiedTime": "2016-07-17T15:29:31.464Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1eFg1RnQxZG9pM2c?resourcekey=0-TvVvIeLj6pMs3wT5hHLxmQ",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1bXBzX0xPeUVuUTA",
-        "name": "Archive",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2016-07-17T15:25:08.604Z",
-        "modifiedTime": "2016-07-17T15:25:08.604Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1bXBzX0xPeUVuUTA?resourcekey=0-zUd-pXJHmy6WkMWm84-9bQ",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1ZmhnQTVCbl96YWM",
-        "name": "Administrative",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2014-08-08T07:11:59.566Z",
-        "modifiedTime": "2016-07-17T15:13:06.538Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1ZmhnQTVCbl96YWM?resourcekey=0-z7i3jlVNg3pI90xjz2w4sg",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1QTFvcmNPOU5NX2s",
-        "name": "Career",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2014-05-14T04:12:22.128Z",
-        "modifiedTime": "2016-07-17T15:12:36.156Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1QTFvcmNPOU5NX2s?resourcekey=0-65ubo_ZP1q49_Ffjd9-zyw",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1Q1Uwd2ZMSGVTRVk",
-        "name": "Projects (General)",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2015-10-22T18:43:09.716Z",
-        "modifiedTime": "2016-07-17T15:09:32.085Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1Q1Uwd2ZMSGVTRVk?resourcekey=0-9ljJjKcP9AC3IqCXur8Mcw",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1flJKZHluTXVWVFhsVTlkd3F2Z1NkcVRDSzZIY1VfV2R3VXJ1THJpZ1hJYzQ",
-        "name": "Health",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2015-05-02T19:12:41.970Z",
-        "modifiedTime": "2016-07-17T15:04:13.148Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1flJKZHluTXVWVFhsVTlkd3F2Z1NkcVRDSzZIY1VfV2R3VXJ1THJpZ1hJYzQ?resourcekey=0-kwIDpmuwJWiSZQkFzorogQ",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "0B3TI1es55md1MEVpR1dLQW1MaVU",
-        "name": "Nexus 5 SMS Backup ",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2016-06-07T02:32:16.598Z",
-        "modifiedTime": "2016-06-07T02:32:16.598Z",
-        "webViewLink": "https://drive.google.com/drive/folders/0B3TI1es55md1MEVpR1dLQW1MaVU?resourcekey=0-7w_bhXRBT4le59F1BVv5Kw",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
-      },
-      {
-        "id": "1bqBqNqj0mO69viPUhZR4KrtNYEuw9QLWy6A7N9mwPrI",
-        "name": "Google Photos",
-        "mimeType": "application/vnd.google-apps.folder",
-        "size": null,
-        "calculatedSize": 0,
-        "createdTime": "2016-01-13T19:01:37.666Z",
-        "modifiedTime": "2016-01-13T19:01:37.666Z",
-        "webViewLink": "https://drive.google.com/drive/folders/1bqBqNqj0mO69viPUhZR4KrtNYEuw9QLWy6A7N9mwPrI",
-        "parents": [
-          "0AHTI1es55md1Uk9PVA"
-        ]
+        "createdTime": "2024-01-01T00:00:00Z",
+        "modifiedTime": "2024-01-01T00:00:00Z",
+        "webViewLink": "https://drive.google.com/drive/folders/folder1",
+        "parents": []
       }
     ],
     "estimated_total_files": 1000
   },
   "metadata": {
-    "timestamp": "2025-12-13T22:30:21.949952+00:00",
-    "file_count": 20,
+    "timestamp": "2025-12-13T23:12:47.078507+00:00",
+    "file_count": 1,
     "total_size": null,
     "last_modified": null,
     "cache_version": 1

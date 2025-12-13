@@ -205,6 +205,24 @@ run_api_tests() {
         # Extract folder count
         FOLDER_COUNT=$(echo "$QUICK_RESPONSE" | python3 -c "import sys, json; d=json.load(sys.stdin); print(len(d.get('top_folders', [])))" 2>/dev/null || echo "?")
         echo -e "${CYAN}  Found ${FOLDER_COUNT} top-level folders${NC}"
+        
+        # Test cache - run again and verify it's fast (cached)
+        echo -e "${CYAN}Testing quick scan cache...${NC}"
+        START_TIME=$(date +%s%N)
+        QUICK_RESPONSE2=$(curl -s http://localhost:8000/api/scan/quick)
+        END_TIME=$(date +%s%N)
+        DURATION=$(( (END_TIME - START_TIME) / 1000000 )) # Convert to milliseconds
+        
+        if echo "$QUICK_RESPONSE2" | grep -q '"overview"'; then
+            if [ $DURATION -lt 1000 ]; then
+                echo -e "${GREEN}✓ Quick scan cache working (${DURATION}ms - likely cached)${NC}"
+            else
+                echo -e "${YELLOW}⚠ Quick scan took ${DURATION}ms (may not be cached)${NC}"
+            fi
+        else
+            echo -e "${RED}✗ Quick scan cache test failed${NC}"
+            EXIT_CODE=1
+        fi
     else
         echo -e "${RED}✗ Quick scan endpoint failed${NC}"
         echo -e "${YELLOW}  Response: ${QUICK_RESPONSE:0:200}...${NC}"
@@ -228,6 +246,11 @@ run_api_tests() {
                 STATUS=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "unknown")
                 PROGRESS=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('progress', {}).get('progress', 0))" 2>/dev/null || echo "0")
                 echo -e "${CYAN}  Scan status: ${STATUS}, Progress: ${PROGRESS}%${NC}"
+                
+                # Test cache - if status is immediately complete, it's from cache
+                if [ "$STATUS" = "complete" ] && [ "$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print('cache' in json.load(sys.stdin).get('progress', {}).get('message', '').lower())" 2>/dev/null || echo 'False')" = "True" ]; then
+                    echo -e "${GREEN}✓ Full scan cache working (returned immediately from cache)${NC}"
+                fi
             else
                 echo -e "${RED}✗ Status endpoint failed${NC}"
                 EXIT_CODE=1
@@ -239,6 +262,74 @@ run_api_tests() {
         EXIT_CODE=1
     fi
     
+    # Test cache invalidation endpoint
+    echo -e "${CYAN}Testing /api/cache (DELETE)...${NC}"
+    DELETE_RESPONSE=$(curl -s -X DELETE http://localhost:8000/api/cache)
+    if echo "$DELETE_RESPONSE" | grep -q '"message"'; then
+        echo -e "${GREEN}✓ Cache invalidation endpoint working${NC}"
+    else
+        echo -e "${YELLOW}⚠ Cache invalidation endpoint may not be working${NC}"
+    fi
+    
+    echo ""
+}
+
+# Function to run visualization safety tests
+run_visualization_tests() {
+    echo -e "${BLUE}=== Running Visualization Safety Tests ===${NC}"
+    
+    if [ ! -d "venv" ]; then
+        echo -e "${YELLOW}Warning: Virtual environment not found. Skipping visualization tests${NC}"
+        return 1
+    fi
+    
+    if [ ! -f "backend/main.py" ]; then
+        echo -e "${YELLOW}Warning: backend/main.py not found. Skipping visualization tests${NC}"
+        return 1
+    fi
+    
+    source venv/bin/activate
+    
+    # Run visualization safety tests
+    if [ -f "backend/tests/test_visualization_safety.py" ]; then
+        python -m pytest backend/tests/test_visualization_safety.py -v --tb=short -m "visualization" || EXIT_CODE=1
+    else
+        echo -e "${YELLOW}No visualization safety tests found${NC}"
+    fi
+    
+    deactivate
+    echo ""
+}
+
+# Function to run cache loading tests
+run_cache_tests() {
+    echo -e "${BLUE}=== Running Cache Loading Tests ===${NC}"
+    
+    if [ ! -d "venv" ]; then
+        echo -e "${YELLOW}Warning: Virtual environment not found. Skipping cache tests${NC}"
+        return 1
+    fi
+    
+    if [ ! -f "backend/main.py" ]; then
+        echo -e "${YELLOW}Warning: backend/main.py not found. Skipping cache tests${NC}"
+        return 1
+    fi
+    
+    source venv/bin/activate
+    
+    # Run cache loading tests
+    if [ -f "backend/tests/test_cache_loading.py" ]; then
+        python -m pytest backend/tests/test_cache_loading.py -v --tb=short -m "cache" || EXIT_CODE=1
+    else
+        echo -e "${YELLOW}No cache loading tests found${NC}"
+    fi
+    
+    # Run all cache tests
+    if find backend/tests -name "test_cache*.py" 2>/dev/null | grep -q .; then
+        python -m pytest backend/tests/test_cache*.py -v --tb=short || EXIT_CODE=1
+    fi
+    
+    deactivate
     echo ""
 }
 
@@ -261,12 +352,20 @@ case $MODE in
     api)
         run_api_tests
         ;;
+    visualization)
+        run_visualization_tests
+        ;;
+    cache)
+        run_cache_tests
+        ;;
     all|*)
         run_backend_tests || true
         run_frontend_tests || true
         run_linting || true
         run_type_check || true
         run_api_tests || true
+        run_visualization_tests || true
+        run_cache_tests || true
         ;;
 esac
 

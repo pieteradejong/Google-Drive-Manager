@@ -6,7 +6,7 @@ import type { QuickScanResponse } from '../types/drive';
 export const useQuickScan = () => {
   const queryClient = useQueryClient();
 
-  // Query for quick scan data
+  // Query for quick scan data - enable on mount to load cached data
   const {
     data,
     isLoading,
@@ -18,7 +18,8 @@ export const useQuickScan = () => {
     queryFn: () => api.quickScan(),
     staleTime: 5 * 60 * 1000, // 5 minutes
     cacheTime: 60 * 60 * 1000, // 1 hour
-    enabled: false, // Don't fetch automatically
+    enabled: true, // Load cached data on mount
+    refetchOnMount: false, // Don't refetch if we have cached data
   });
 
   // Mutation to trigger scan

@@ -90,8 +90,18 @@ export const DriveVisualizer = () => {
   const { progress: fullProgress, result: fullResult, isLoading: fullLoading, error: fullError, startScan: startFullScan, dataUpdatedAt: fullDataUpdatedAt } = useFullScan();
   
   const [displayData, setDisplayData] = useState<ScanResponse | null>(null);
+  
+  // Try to load cached full scan on mount
+  useEffect(() => {
+    if (!fullResult && !fullLoading) {
+      // Try to start a scan - if backend has valid cache, it returns immediately
+      startFullScan().catch(() => {
+        // Ignore errors - just means no cache available
+      });
+    }
+  }, []); // Only run on mount
 
-  // Update display data when we have results
+  // Update display data when we have results (including cached data on load)
   useEffect(() => {
     if (fullResult) {
       setDisplayData(fullResult);
@@ -111,6 +121,10 @@ export const DriveVisualizer = () => {
       setDisplayData(quickResponse);
     }
   }, [quickData, fullResult]);
+  
+  // Show notice if data was loaded from cache
+  const isCachedData = (quickData && quickDataUpdatedAt && Date.now() - quickDataUpdatedAt > 60000) ||
+                       (fullResult && fullDataUpdatedAt && Date.now() - fullDataUpdatedAt > 60000);
 
   const handleQuickScan = async () => {
     try {
@@ -240,6 +254,46 @@ export const DriveVisualizer = () => {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
+      {/* Cache Notice Banner */}
+      {quickData && quickDataUpdatedAt && Date.now() - quickDataUpdatedAt > 60000 && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-amber-600" />
+              <span className="text-amber-800">
+                Showing cached data from {formatTimeAgo(quickDataUpdatedAt)}. 
+                {Date.now() - quickDataUpdatedAt > 3600000 && ' Click "Refresh" to get latest data.'}
+              </span>
+            </div>
+            <button
+              onClick={() => handleRefreshCache('quick_scan')}
+              className="text-amber-700 hover:text-amber-900 underline text-xs"
+            >
+              Refresh now
+            </button>
+          </div>
+        </div>
+      )}
+      {fullResult && fullDataUpdatedAt && Date.now() - fullDataUpdatedAt > 60000 && (
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-amber-600" />
+              <span className="text-amber-800">
+                Showing cached full scan from {formatTimeAgo(fullDataUpdatedAt)}. 
+                {Date.now() - fullDataUpdatedAt > 604800000 && ' Click "Full Scan" to refresh.'}
+              </span>
+            </div>
+            <button
+              onClick={handleFullScan}
+              className="text-amber-700 hover:text-amber-900 underline text-xs"
+            >
+              Run new scan
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4">
         <div className="flex items-center justify-between">
@@ -351,9 +405,14 @@ export const DriveVisualizer = () => {
             </div>
             <div className="flex items-center gap-3">
               {quickDataUpdatedAt && (
-                <div className="flex items-center gap-1 text-xs text-gray-600">
+                <div className="flex items-center gap-1 text-xs">
                   <Clock size={14} />
-                  <span>Updated {formatTimeAgo(quickDataUpdatedAt)}</span>
+                  <span className={quickDataUpdatedAt && Date.now() - quickDataUpdatedAt > 3600000 ? 'text-amber-600 font-medium' : 'text-gray-600'}>
+                    {Date.now() - quickDataUpdatedAt < 60000 
+                      ? 'Just loaded' 
+                      : `Updated ${formatTimeAgo(quickDataUpdatedAt)}`}
+                    {Date.now() - quickDataUpdatedAt > 3600000 && ' (cached)'}
+                  </span>
                 </div>
               )}
               <button
@@ -426,9 +485,14 @@ export const DriveVisualizer = () => {
             </div>
             <div className="flex items-center gap-3">
               {fullDataUpdatedAt && (
-                <div className="flex items-center gap-1 text-xs text-gray-600">
+                <div className="flex items-center gap-1 text-xs">
                   <Clock size={14} />
-                  <span>Updated {formatTimeAgo(fullDataUpdatedAt)}</span>
+                  <span className={fullDataUpdatedAt && Date.now() - fullDataUpdatedAt > 604800000 ? 'text-amber-600 font-medium' : 'text-gray-600'}>
+                    {Date.now() - fullDataUpdatedAt < 60000 
+                      ? 'Just loaded' 
+                      : `Updated ${formatTimeAgo(fullDataUpdatedAt)}`}
+                    {Date.now() - fullDataUpdatedAt > 604800000 && ' (cached)'}
+                  </span>
                 </div>
               )}
               <button

@@ -1,10 +1,14 @@
 /** Hook for full scan with progress tracking using TanStack Query */
+import { useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { FullScanStatusResponse, ScanResponse } from '../types/drive';
 
 export const useFullScan = () => {
   const queryClient = useQueryClient();
+
+  // Check for cached full scan result in query client
+  const cachedResult = queryClient.getQueryData<ScanResponse>(['fullScanResult']);
 
   // Mutation to start a scan
   const startScanMutation = useMutation({
@@ -39,12 +43,12 @@ export const useFullScan = () => {
     cacheTime: 30 * 60 * 1000, // Keep in cache for 30 minutes
   });
 
-  // Extract result from progress
-  const result = progress?.result || null;
+  // Extract result from progress or cached data
+  const result = progress?.result || cachedResult || null;
 
   // Cache the result when scan completes
-  if (result && progress?.status === 'complete') {
-    queryClient.setQueryData(['fullScanResult'], result);
+  if (progress?.result && progress?.status === 'complete') {
+    queryClient.setQueryData(['fullScanResult'], progress.result);
   }
 
   const startScan = async () => {
