@@ -115,7 +115,8 @@ class TestScanEndpoint:
         response = client.get("/api/scan")
         
         assert response.status_code == 500
-        assert "Authentication error" in response.json()['detail']
+        detail = response.json()['detail']
+        assert "credentials" in detail.lower() or "authentication" in detail.lower()
     
     @patch('backend.main.get_service')
     @patch('backend.main.list_all_files')

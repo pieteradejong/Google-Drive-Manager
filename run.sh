@@ -33,11 +33,11 @@ cleanup() {
     echo -e "${YELLOW}Shutting down...${NC}"
     if [ ! -z "$BACKEND_PID" ]; then
         kill $BACKEND_PID 2>/dev/null || true
-        echo -e "${BLUE}Backend stopped${NC}"
+        echo -e "${CYAN}Backend stopped${NC}"
     fi
     if [ ! -z "$FRONTEND_PID" ]; then
         kill $FRONTEND_PID 2>/dev/null || true
-        echo -e "${BLUE}Frontend stopped${NC}"
+        echo -e "${CYAN}Frontend stopped${NC}"
     fi
     exit 0
 }
@@ -97,8 +97,8 @@ start_backend() {
     BACKEND_PID=$!
     
     echo -e "${GREEN}✓ Backend started (PID: $BACKEND_PID)${NC}"
-    echo -e "${BLUE}  Backend URL: http://localhost:8000${NC}"
-    echo -e "${BLUE}  API docs: http://localhost:8000/docs${NC}"
+    echo -e "${CYAN}  Backend URL: http://localhost:8000${NC}"
+    echo -e "${CYAN}  API docs: http://localhost:8000/docs${NC}"
     echo ""
 }
 
@@ -127,7 +127,7 @@ start_frontend() {
     cd ..
     
     echo -e "${GREEN}✓ Frontend started (PID: $FRONTEND_PID)${NC}"
-    echo -e "${BLUE}  Frontend URL: http://localhost:5173${NC}"
+    echo -e "${CYAN}  Frontend URL: http://localhost:5173${NC}"
     echo ""
 }
 

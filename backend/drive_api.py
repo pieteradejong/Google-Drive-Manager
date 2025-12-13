@@ -15,9 +15,14 @@ def list_all_files(service) -> List[Dict[str, Any]]:
     """
     all_files = []
     page_token = None
+    page_count = 0
     
     while True:
         try:
+            page_count += 1
+            if page_count % 10 == 0:
+                print(f"  Fetched {len(all_files)} files so far...")
+            
             results = service.files().list(
                 q="trashed=false",
                 pageSize=1000,
@@ -34,6 +39,8 @@ def list_all_files(service) -> List[Dict[str, Any]]:
                 
         except Exception as e:
             print(f"Error fetching files: {e}")
+            import traceback
+            traceback.print_exc()
             break
     
     return all_files
@@ -119,4 +126,91 @@ def get_file_metadata(service, file_id: str) -> Dict[str, Any]:
         fileId=file_id,
         fields="*"
     ).execute()
+
+
+def get_drive_overview(service) -> Dict[str, Any]:
+    """
+    Get quick overview of Drive using about.get endpoint.
+    
+    Args:
+        service: Authenticated Google Drive API service
+        
+    Returns:
+        Dictionary with storage quota and user info
+    """
+    about = service.about().get(
+        fields="storageQuota,user"
+    ).execute()
+    
+    storage_quota = about.get('storageQuota', {})
+    user = about.get('user', {})
+    
+    return {
+        "total_quota": storage_quota.get('limit'),
+        "used": storage_quota.get('usage'),
+        "used_in_drive": storage_quota.get('usageInDrive'),
+        "user_email": user.get('emailAddress'),
+        "user_display_name": user.get('displayName')
+    }
+
+
+def get_top_level_folders(service) -> tuple[List[Dict[str, Any]], Optional[int]]:
+    """
+    Get only top-level folders (folders in root).
+    
+    Args:
+        service: Authenticated Google Drive API service
+        
+    Returns:
+        Tuple of (list of folder dicts, estimated total files count)
+    """
+    folders = []
+    page_token = None
+    estimated_total = None
+    
+    # First, get a sample to estimate total files
+    first_page = service.files().list(
+        q="trashed=false",
+        pageSize=1000,
+        fields="nextPageToken, files(id)"
+    ).execute()
+    
+    # Estimate: if there's a nextPageToken, there are at least 1000 files
+    # We can't know exact count without fetching all, but we can estimate
+    if first_page.get('nextPageToken'):
+        # Conservative estimate: at least 1000, likely more
+        estimated_total = 1000  # Will be refined as we scan
+    
+    # Now get top-level folders
+    while True:
+        try:
+            results = service.files().list(
+                q="trashed=false and mimeType='application/vnd.google-apps.folder' and 'root' in parents",
+                pageSize=1000,
+                fields="nextPageToken, files(id, name, mimeType, parents, size, createdTime, modifiedTime, webViewLink)",
+                pageToken=page_token
+            ).execute()
+            
+            files = results.get('files', [])
+            folders.extend(files)
+            page_token = results.get('nextPageToken')
+            
+            if not page_token:
+                break
+                
+        except Exception as e:
+            print(f"Error fetching top-level folders: {e}")
+            break
+    
+    # For quick scan, we skip size calculation to keep it fast
+    # Sizes will be calculated during full scan
+    # Set calculatedSize to 0 for now
+    for folder in folders:
+        folder['calculatedSize'] = 0
+    
+    return folders, estimated_total
+
+
+
+
 

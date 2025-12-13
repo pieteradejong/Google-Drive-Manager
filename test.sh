@@ -178,6 +178,70 @@ run_type_check() {
     echo ""
 }
 
+# Function to run API integration tests
+run_api_tests() {
+    echo -e "${BLUE}=== Running API Integration Tests ===${NC}"
+    
+    # Check if backend is running
+    if ! curl -s http://localhost:8000/api/health > /dev/null 2>&1; then
+        echo -e "${YELLOW}Warning: Backend not running on port 8000. Skipping API tests${NC}"
+        echo -e "${YELLOW}  Start backend with: ./run.sh backend${NC}"
+        return 1
+    fi
+    
+    echo -e "${CYAN}Testing /api/health...${NC}"
+    HEALTH_RESPONSE=$(curl -s http://localhost:8000/api/health)
+    if echo "$HEALTH_RESPONSE" | grep -q '"status":"ok"'; then
+        echo -e "${GREEN}✓ Health endpoint working${NC}"
+    else
+        echo -e "${RED}✗ Health endpoint failed${NC}"
+        EXIT_CODE=1
+    fi
+    
+    echo -e "${CYAN}Testing /api/scan/quick...${NC}"
+    QUICK_RESPONSE=$(curl -s http://localhost:8000/api/scan/quick)
+    if echo "$QUICK_RESPONSE" | grep -q '"overview"'; then
+        echo -e "${GREEN}✓ Quick scan endpoint working${NC}"
+        # Extract folder count
+        FOLDER_COUNT=$(echo "$QUICK_RESPONSE" | python3 -c "import sys, json; d=json.load(sys.stdin); print(len(d.get('top_folders', [])))" 2>/dev/null || echo "?")
+        echo -e "${CYAN}  Found ${FOLDER_COUNT} top-level folders${NC}"
+    else
+        echo -e "${RED}✗ Quick scan endpoint failed${NC}"
+        echo -e "${YELLOW}  Response: ${QUICK_RESPONSE:0:200}...${NC}"
+        EXIT_CODE=1
+    fi
+    
+    echo -e "${CYAN}Testing /api/scan/full/start...${NC}"
+    START_RESPONSE=$(curl -s -X POST http://localhost:8000/api/scan/full/start)
+    if echo "$START_RESPONSE" | grep -q '"scan_id"'; then
+        echo -e "${GREEN}✓ Full scan start endpoint working${NC}"
+        SCAN_ID=$(echo "$START_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['scan_id'])" 2>/dev/null)
+        if [ -n "$SCAN_ID" ]; then
+            echo -e "${CYAN}  Started scan: ${SCAN_ID:0:8}...${NC}"
+            
+            # Test status endpoint
+            echo -e "${CYAN}Testing /api/scan/full/status/{scan_id}...${NC}"
+            sleep 1  # Give scan a moment to start
+            STATUS_RESPONSE=$(curl -s "http://localhost:8000/api/scan/full/status/$SCAN_ID")
+            if echo "$STATUS_RESPONSE" | grep -q '"status"'; then
+                echo -e "${GREEN}✓ Status endpoint working${NC}"
+                STATUS=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin)['status'])" 2>/dev/null || echo "unknown")
+                PROGRESS=$(echo "$STATUS_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('progress', {}).get('progress', 0))" 2>/dev/null || echo "0")
+                echo -e "${CYAN}  Scan status: ${STATUS}, Progress: ${PROGRESS}%${NC}"
+            else
+                echo -e "${RED}✗ Status endpoint failed${NC}"
+                EXIT_CODE=1
+            fi
+        fi
+    else
+        echo -e "${RED}✗ Full scan start endpoint failed${NC}"
+        echo -e "${YELLOW}  Response: ${START_RESPONSE:0:200}...${NC}"
+        EXIT_CODE=1
+    fi
+    
+    echo ""
+}
+
 # Main logic
 MODE=${1:-all}
 
@@ -194,11 +258,15 @@ case $MODE in
     type-check)
         run_type_check
         ;;
+    api)
+        run_api_tests
+        ;;
     all|*)
         run_backend_tests || true
         run_frontend_tests || true
         run_linting || true
         run_type_check || true
+        run_api_tests || true
         ;;
 esac
 
