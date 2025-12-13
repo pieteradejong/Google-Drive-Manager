@@ -75,6 +75,9 @@ export const DriveVisualizer = () => {
 
   const error = quickError || fullError;
   const isLoading = quickLoading || fullLoading;
+  
+  // Detect if we're displaying quick scan data (not full scan)
+  const isQuickScanData = quickData && !fullResult && displayData;
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -85,11 +88,12 @@ export const DriveVisualizer = () => {
             <h1 className="text-2xl font-bold text-gray-900">Google Drive Manager</h1>
             <p className="text-sm text-gray-600 mt-1">Visualize and manage your Drive storage</p>
           </div>
-          <div className="flex items-center gap-3">
-            {!quickData && (
+          <div className="flex items-center gap-4">
+            {/* Quick Scan Button */}
+            <div className="flex flex-col">
               <button
                 onClick={handleQuickScan}
-                disabled={quickLoading}
+                disabled={quickLoading || fullLoading}
                 className="flex items-center gap-2 px-4 py-2 bg-primary-600 text-white rounded-lg hover:bg-primary-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
                 {quickLoading ? (
@@ -104,14 +108,23 @@ export const DriveVisualizer = () => {
                   </>
                 )}
               </button>
-            )}
-            {quickData && !fullResult && (
+              <p className="text-xs text-gray-500 mt-1 text-center max-w-[140px]">
+                {quickLoading 
+                  ? "Fetching overview..." 
+                  : quickData 
+                    ? "✓ Completed" 
+                    : "Get storage overview & top folders (5-10 sec)"}
+              </p>
+            </div>
+
+            {/* Full Scan Button */}
+            <div className="flex flex-col">
               <button
                 onClick={handleFullScan}
-                disabled={fullLoading}
+                disabled={!quickData || fullLoading || fullProgress?.status === 'running'}
                 className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
-                {fullLoading ? (
+                {fullLoading || fullProgress?.status === 'running' ? (
                   <>
                     <Loader2 className="animate-spin" size={18} />
                     <span>Scanning...</span>
@@ -123,15 +136,31 @@ export const DriveVisualizer = () => {
                   </>
                 )}
               </button>
-            )}
+              <p className="text-xs text-gray-500 mt-1 text-center max-w-[140px]">
+                {!quickData 
+                  ? "Complete scan of all files (requires quick scan first)"
+                  : fullProgress?.status === 'running'
+                    ? `Scanning... ${Math.round(fullProgress.progress.progress)}%`
+                    : fullResult
+                      ? "✓ Completed"
+                      : "Scan all files & calculate sizes (2-5 min)"}
+              </p>
+            </div>
+
+            {/* Rescan Button - Only show after full scan completes */}
             {fullResult && (
-              <button
-                onClick={handleQuickScan}
-                className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
-              >
-                <RefreshCw size={18} />
-                <span>Rescan</span>
-              </button>
+              <div className="flex flex-col">
+                <button
+                  onClick={handleQuickScan}
+                  className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                >
+                  <RefreshCw size={18} />
+                  <span>Rescan</span>
+                </button>
+                <p className="text-xs text-gray-500 mt-1 text-center max-w-[140px]">
+                  Start over with quick scan
+                </p>
+              </div>
             )}
           </div>
         </div>
@@ -220,8 +249,8 @@ export const DriveVisualizer = () => {
         </div>
       )}
 
-      {/* View Toggle */}
-      {displayData && (
+      {/* View Toggle - Only show for full scan results */}
+      {displayData && !isQuickScanData && (
         <div className="bg-white border-b border-gray-200 px-6 py-2">
           <div className="flex items-center gap-2">
             <button
@@ -283,7 +312,7 @@ export const DriveVisualizer = () => {
       )}
 
       {/* Loading State */}
-      {isLoading && !data && (
+      {isLoading && !displayData && (
         <div className="flex-1 flex items-center justify-center">
           <div className="text-center">
             <Loader2 className="animate-spin mx-auto text-primary-600" size={48} />
@@ -293,8 +322,55 @@ export const DriveVisualizer = () => {
         </div>
       )}
 
-      {/* Visualization */}
-      {displayData && !isLoading && (
+      {/* Quick Scan Placeholder */}
+      {isQuickScanData && (
+        <div className="flex-1 flex items-center justify-center bg-blue-50">
+          <div className="text-center max-w-2xl px-6">
+            <Database className="mx-auto text-blue-500" size={64} />
+            <h3 className="mt-6 text-2xl font-semibold text-gray-900">Quick Scan Complete</h3>
+            <p className="mt-4 text-gray-600">
+              Quick scan provides an overview of your Drive storage and identifies top-level folders.
+              <br />
+              <span className="font-medium">To see the complete visualization with all files and folder sizes, run a Full Scan.</span>
+            </p>
+            <div className="mt-6 bg-white rounded-lg border border-blue-200 p-4 text-left">
+              <p className="text-sm font-medium text-gray-900 mb-2">What Quick Scan shows:</p>
+              <ul className="text-sm text-gray-600 space-y-1 list-disc list-inside">
+                <li>Storage quota and usage</li>
+                <li>Number of top-level folders</li>
+                <li>Estimated total file count</li>
+              </ul>
+              <p className="text-sm font-medium text-gray-900 mt-4 mb-2">What Full Scan provides:</p>
+              <ul className="text-sm text-gray-600 space-y-1 list-disc list-inside">
+                <li>Complete file and folder hierarchy</li>
+                <li>Accurate folder sizes (calculated recursively)</li>
+                <li>Interactive treemap and list visualizations</li>
+                <li>Detailed file metadata</li>
+              </ul>
+            </div>
+            <button
+              onClick={handleFullScan}
+              disabled={fullLoading || fullProgress?.status === 'running'}
+              className="mt-6 flex items-center gap-2 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors mx-auto"
+            >
+              {fullLoading || fullProgress?.status === 'running' ? (
+                <>
+                  <Loader2 className="animate-spin" size={20} />
+                  <span>Starting Full Scan...</span>
+                </>
+              ) : (
+                <>
+                  <Database size={20} />
+                  <span>Run Full Scan</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Visualization - Only show for full scan results */}
+      {displayData && !isLoading && !isQuickScanData && (
         <div className="flex-1 overflow-hidden">
           {viewMode === 'treemap' ? (
             <TreemapView
@@ -319,7 +395,11 @@ export const DriveVisualizer = () => {
             <LayoutGrid className="mx-auto text-gray-400" size={64} />
             <h3 className="mt-4 text-lg font-semibold text-gray-900">No data loaded</h3>
             <p className="mt-2 text-gray-600">Click "Quick Scan" to get started</p>
-            <p className="mt-1 text-sm text-gray-500">Quick Scan shows overview and top folders in seconds</p>
+            <p className="mt-1 text-sm text-gray-500">
+              <strong>Quick Scan</strong> shows storage overview and top-level folders in 5-10 seconds.
+              <br />
+              <strong>Full Scan</strong> analyzes all files and calculates folder sizes (2-5 minutes).
+            </p>
           </div>
         </div>
       )}
