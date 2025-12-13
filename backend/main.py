@@ -210,6 +210,14 @@ async def scan_drive() -> ScanResponse:
 
 def run_full_scan(scan_id: str):
     """Run full scan in background thread."""
+    # Ensure scan state exists before starting
+    if scan_id not in _scan_states:
+        _scan_states[scan_id] = {
+            "status": "starting",
+            "progress": None,
+            "result": None
+        }
+    
     try:
         _scan_states[scan_id]["status"] = "running"
         _scan_states[scan_id]["progress"] = ScanProgress(
@@ -345,6 +353,15 @@ def run_full_scan(scan_id: str):
         error_detail = str(e)
         print(f"Error in full scan {scan_id}: {error_detail}")
         print(traceback.format_exc())
+        
+        # Ensure scan state exists before updating error status
+        if scan_id not in _scan_states:
+            _scan_states[scan_id] = {
+                "status": "error",
+                "progress": None,
+                "result": None
+            }
+        
         _scan_states[scan_id]["status"] = "error"
         _scan_states[scan_id]["progress"] = ScanProgress(
             scan_id=scan_id,

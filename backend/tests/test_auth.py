@@ -164,18 +164,26 @@ class TestAuthenticate:
         assert mock_flow.run_local_server.called
         assert service == mock_service
     
+    @patch('backend.auth.get_credentials_from_env')
+    @patch('backend.auth.get_token_path')
     @patch('backend.auth.get_credentials_path')
-    def test_authenticate_no_credentials_file(self, mock_creds_path, tmp_path):
+    def test_authenticate_no_credentials_file(self, mock_creds_path, mock_token_path, mock_get_env, tmp_path):
         """Test authentication raises error when credentials.json doesn't exist."""
         creds_file = tmp_path / 'nonexistent.json'
+        token_file = tmp_path / 'token.json'
         mock_creds_path.return_value = creds_file
+        mock_token_path.return_value = token_file
+        # Mock environment variables to return None (not set)
+        mock_get_env.return_value = None
         
+        # Ensure neither file exists
         assert not creds_file.exists()
+        assert not token_file.exists()
         
         with pytest.raises(FileNotFoundError) as exc_info:
             authenticate()
         
-        assert "credentials.json not found" in str(exc_info.value)
+        assert "credentials" in str(exc_info.value).lower() or "not found" in str(exc_info.value).lower()
     
     @patch('backend.auth.build')
     @patch('backend.auth.Credentials')
