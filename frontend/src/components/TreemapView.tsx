@@ -1,7 +1,12 @@
 /** Treemap visualization component using D3 */
 import { useEffect, useRef } from 'react';
-import * as d3 from 'd3';
 import type { FileItem } from '../types/drive';
+
+// Tree-shake D3 imports - only import what we need
+import { select } from 'd3-selection';
+import { hierarchy, treemap } from 'd3-hierarchy';
+import { scaleOrdinal } from 'd3-scale';
+import { schemeCategory10 } from 'd3-scale-chromatic';
 
 interface TreemapViewProps {
   files: FileItem[];
@@ -15,62 +20,106 @@ export const TreemapView = ({ files, childrenMap, onFileClick }: TreemapViewProp
   useEffect(() => {
     if (!svgRef.current || files.length === 0) return;
 
-    const svg = d3.select(svgRef.current);
-    svg.selectAll('*').remove();
+    try {
+      const svg = select(svgRef.current);
+      svg.selectAll('*').remove();
 
-    const width = svgRef.current.clientWidth;
-    const height = svgRef.current.clientHeight;
+      const width = svgRef.current.clientWidth;
+      const height = svgRef.current.clientHeight;
 
-    // Build hierarchy
-    const rootFiles = files.filter((f) => f.parents.length === 0);
-    if (rootFiles.length === 0) return;
+      if (width === 0 || height === 0) return;
 
-    // Create hierarchy data structure
-    const buildHierarchy = (fileId: string): any => {
-      const file = files.find((f) => f.id === fileId);
-      if (!file) return null;
+      // Build hierarchy with cycle detection and depth limiting
+      const rootFiles = files.filter((f) => f.parents.length === 0);
+      if (rootFiles.length === 0) return;
 
-      const children = childrenMap[fileId] || [];
-      const childNodes = children
-        .map((childId) => buildHierarchy(childId))
-        .filter((node) => node !== null);
+      const MAX_DEPTH = 10;
+      const MAX_NODES = 5000;
+      let nodeCount = 0;
 
-      const size = file.calculatedSize || file.size || 0;
+      const buildHierarchy = (fileId: string, depth: number = 0, path: Set<string> = new Set()): any => {
+        // Prevent infinite loops from circular references
+        if (path.has(fileId)) {
+          console.warn(`Circular reference detected for file ${fileId}`);
+          return null;
+        }
 
-      return {
-        name: file.name,
-        value: size,
-        file,
-        children: childNodes.length > 0 ? childNodes : undefined,
+        // Limit recursion depth
+        if (depth > MAX_DEPTH) {
+          return null;
+        }
+
+        // Limit total nodes
+        if (nodeCount >= MAX_NODES) {
+          return null;
+        }
+
+        const file = files.find((f) => f.id === fileId);
+        if (!file) return null;
+
+        nodeCount++;
+        const newPath = new Set(path);
+        newPath.add(fileId);
+
+        const children = childrenMap[fileId] || [];
+        const childNodes = children
+          .map((childId) => buildHierarchy(childId, depth + 1, newPath))
+          .filter((node) => node !== null);
+
+        const size = file.calculatedSize || file.size || 0;
+
+        return {
+          name: file.name,
+          value: size,
+          file,
+          children: childNodes.length > 0 ? childNodes : undefined,
+        };
       };
-    };
 
-    const rootData = {
-      name: 'root',
-      children: rootFiles.map((f) => buildHierarchy(f.id)).filter((n) => n !== null),
-    };
+      const rootData = {
+        name: 'root',
+        children: rootFiles
+          .slice(0, 50) // Limit to top 50 root folders
+          .map((f) => buildHierarchy(f.id))
+          .filter((n) => n !== null),
+      };
 
-    const root = d3.hierarchy(rootData as any).sum((d: any) => d.value || 0);
+      if (!rootData.children || rootData.children.length === 0) {
+        svg.append('text')
+          .attr('x', width / 2)
+          .attr('y', height / 2)
+          .attr('text-anchor', 'middle')
+          .attr('fill', '#666')
+          .text('No data to display');
+        return;
+      }
 
+      const root = hierarchy(rootData as any).sum((d: any) => d.value || 0);
+    
     // Create treemap layout
-    const treemap = d3
-      .treemap()
+    const treemapLayout = treemap()
       .size([width, height])
       .padding(2)
       .round(true);
-
-    treemap(root);
-
+    
+    treemapLayout(root);
+    
     // Color scale
-    const color = d3.scaleOrdinal(d3.schemeCategory10);
+    const color = scaleOrdinal(schemeCategory10);
 
-    // Draw rectangles
-    const cells = svg
-      .selectAll('g')
-      .data(root.leaves())
-      .enter()
-      .append('g')
-      .attr('transform', (d: any) => `translate(${d.x0},${d.y0})`);
+      // Limit leaves to prevent too many DOM elements
+      const allLeaves = root.leaves();
+      const visibleLeaves = allLeaves.length > MAX_NODES 
+        ? allLeaves.slice(0, MAX_NODES)
+        : allLeaves;
+
+      // Draw rectangles
+      const cells = svg
+        .selectAll('g')
+        .data(visibleLeaves)
+        .enter()
+        .append('g')
+        .attr('transform', (d: any) => `translate(${d.x0},${d.y0})`);
 
     cells
       .append('rect')
@@ -86,10 +135,10 @@ export const TreemapView = ({ files, childrenMap, onFileClick }: TreemapViewProp
         }
       })
       .on('mouseover', function () {
-        d3.select(this).attr('opacity', 0.8);
+        select(this).attr('opacity', 0.8);
       })
       .on('mouseout', function () {
-        d3.select(this).attr('opacity', 1);
+        select(this).attr('opacity', 1);
       });
 
     // Add labels
@@ -111,6 +160,26 @@ export const TreemapView = ({ files, childrenMap, onFileClick }: TreemapViewProp
         if (width < 60 || height < 20) return '';
         return d.data.name.length > 20 ? d.data.name.substring(0, 17) + '...' : d.data.name;
       });
+    } catch (error) {
+      console.error('Error rendering Treemap:', error);
+      if (svgRef.current) {
+        const svg = select(svgRef.current);
+        svg.selectAll('*').remove();
+        svg.append('text')
+          .attr('x', svgRef.current.clientWidth / 2)
+          .attr('y', svgRef.current.clientHeight / 2)
+          .attr('text-anchor', 'middle')
+          .attr('fill', '#f00')
+          .text('Error rendering visualization. Try a different view.');
+      }
+    }
+    
+    // Cleanup function
+    return () => {
+      if (svgRef.current) {
+        select(svgRef.current).selectAll('*').remove();
+      }
+    };
   }, [files, childrenMap, onFileClick]);
 
   if (files.length === 0) {

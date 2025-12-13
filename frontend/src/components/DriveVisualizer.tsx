@@ -1,12 +1,29 @@
 /** Main Drive visualization component */
 import { useState, useEffect } from 'react';
-import { Loader2, RefreshCw, LayoutGrid, List, AlertCircle, Zap, Database } from 'lucide-react';
+import { Loader2, RefreshCw, LayoutGrid, List, AlertCircle, Zap, Database, Clock, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useQuickScan } from '../hooks/useQuickScan';
 import { useFullScan } from '../hooks/useFullScan';
 import { useVisualizationStore } from '../stores/visualizationStore';
 import { TreemapView } from './TreemapView';
 import { ListView } from './ListView';
+import { api } from '../api/client';
+import { useQueryClient } from '@tanstack/react-query';
 import type { FileItem, ScanResponse } from '../types/drive';
+import type { ExperimentType } from '../stores/visualizationStore';
+
+// Lazy load experiment components to reduce initial bundle size
+import { lazy, Suspense } from 'react';
+
+const FolderFirstView = lazy(() => import('./experiments/FolderFirstView').then(m => ({ default: m.FolderFirstView })));
+const SidebarTreeView = lazy(() => import('./experiments/SidebarTreeView').then(m => ({ default: m.SidebarTreeView })));
+const BreadcrumbView = lazy(() => import('./experiments/BreadcrumbView').then(m => ({ default: m.BreadcrumbView })));
+const SizeGridView = lazy(() => import('./experiments/SizeGridView').then(m => ({ default: m.SizeGridView })));
+const TimelineView = lazy(() => import('./experiments/TimelineView').then(m => ({ default: m.TimelineView })));
+const TypeGroupedView = lazy(() => import('./experiments/TypeGroupedView').then(m => ({ default: m.TypeGroupedView })));
+const SearchFirstView = lazy(() => import('./experiments/SearchFirstView').then(m => ({ default: m.SearchFirstView })));
+const SunburstView = lazy(() => import('./experiments/SunburstView').then(m => ({ default: m.SunburstView })));
+const SankeyView = lazy(() => import('./experiments/SankeyView').then(m => ({ default: m.SankeyView })));
+const CardFolderView = lazy(() => import('./experiments/CardFolderView').then(m => ({ default: m.CardFolderView })));
 
 const formatSize = (bytes: number | string | undefined): string => {
   if (!bytes) return '0 B';
@@ -23,10 +40,54 @@ const formatSize = (bytes: number | string | undefined): string => {
   return `${size.toFixed(2)} ${units[unitIndex]}`;
 };
 
+// Experiment feedback component
+const ExperimentFeedback = ({ experiment }: { experiment: ExperimentType }) => {
+  const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
+  
+  const handleFeedback = (type: 'up' | 'down') => {
+    setFeedback(type);
+    // Could send to analytics/backend here
+    console.log(`Experiment feedback: ${experiment} - ${type}`);
+  };
+  
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-xs text-gray-500">Helpful?</span>
+      <button
+        onClick={() => handleFeedback('up')}
+        className={`p-1 rounded ${
+          feedback === 'up' 
+            ? 'bg-green-100 text-green-700' 
+            : 'text-gray-400 hover:text-green-600 hover:bg-green-50'
+        }`}
+        title="This works well"
+      >
+        <ThumbsUp size={16} />
+      </button>
+      <button
+        onClick={() => handleFeedback('down')}
+        className={`p-1 rounded ${
+          feedback === 'down' 
+            ? 'bg-red-100 text-red-700' 
+            : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
+        }`}
+        title="This doesn't work well"
+      >
+        <ThumbsDown size={16} />
+      </button>
+    </div>
+  );
+};
+
 export const DriveVisualizer = () => {
-  const { viewMode, setViewMode } = useVisualizationStore();
-  const { data: quickData, isLoading: quickLoading, error: quickError, scan: quickScan } = useQuickScan();
-  const { progress: fullProgress, result: fullResult, isLoading: fullLoading, error: fullError, startScan: startFullScan } = useFullScan();
+  const { 
+    currentExperiment, 
+    setCurrentExperiment, 
+    currentFolderId, 
+    setCurrentFolderId 
+  } = useVisualizationStore();
+  const { data: quickData, isLoading: quickLoading, error: quickError, scan: quickScan, dataUpdatedAt: quickDataUpdatedAt } = useQuickScan();
+  const { progress: fullProgress, result: fullResult, isLoading: fullLoading, error: fullError, startScan: startFullScan, dataUpdatedAt: fullDataUpdatedAt } = useFullScan();
   
   const [displayData, setDisplayData] = useState<ScanResponse | null>(null);
 
@@ -78,6 +139,104 @@ export const DriveVisualizer = () => {
   
   // Detect if we're displaying quick scan data (not full scan)
   const isQuickScanData = quickData && !fullResult && displayData;
+
+  const queryClient = useQueryClient();
+
+  const handleRefreshCache = async (scanType?: 'quick_scan' | 'full_scan') => {
+    try {
+      await api.invalidateCache(scanType);
+      // Invalidate TanStack Query cache
+      if (scanType === 'quick_scan') {
+        queryClient.invalidateQueries({ queryKey: ['quickScan'] });
+      } else if (scanType === 'full_scan') {
+        queryClient.invalidateQueries({ queryKey: ['fullScan'] });
+      } else {
+        queryClient.invalidateQueries();
+      }
+    } catch (err) {
+      console.error('Error invalidating cache:', err);
+    }
+  };
+
+  const formatTimeAgo = (timestamp: number | undefined): string => {
+    if (!timestamp) return '';
+    const seconds = Math.floor((Date.now() - timestamp) / 1000);
+    if (seconds < 60) return 'just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
+  const renderExperiment = (data: ScanResponse) => {
+    const commonProps = {
+      files: data.files,
+      childrenMap: data.children_map,
+      onFileClick: handleFileClick,
+    };
+
+    const LoadingFallback = () => (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 className="animate-spin text-primary-600" size={32} />
+      </div>
+    );
+
+    let ExperimentComponent: React.ComponentType<any> | null = null;
+    let experimentProps = commonProps;
+
+    switch (currentExperiment) {
+      case 'folder-first':
+        ExperimentComponent = FolderFirstView;
+        break;
+      case 'sidebar-tree':
+        ExperimentComponent = SidebarTreeView;
+        break;
+      case 'breadcrumb':
+        ExperimentComponent = BreadcrumbView;
+        experimentProps = { ...commonProps, currentFolderId, onFolderSelect: setCurrentFolderId };
+        break;
+      case 'size-grid':
+        ExperimentComponent = SizeGridView;
+        break;
+      case 'timeline':
+        ExperimentComponent = TimelineView;
+        break;
+      case 'type-grouped':
+        ExperimentComponent = TypeGroupedView;
+        break;
+      case 'search-first':
+        ExperimentComponent = SearchFirstView;
+        break;
+      case 'card-view':
+        ExperimentComponent = CardFolderView;
+        experimentProps = { ...commonProps, currentFolderId, onFolderSelect: setCurrentFolderId };
+        break;
+      case 'sunburst':
+        ExperimentComponent = SunburstView;
+        break;
+      case 'sankey':
+        ExperimentComponent = SankeyView;
+        break;
+      case 'treemap':
+        return <TreemapView {...commonProps} />;
+      case 'list':
+        return <ListView {...commonProps} />;
+      default:
+        ExperimentComponent = FolderFirstView;
+    }
+
+    if (ExperimentComponent) {
+      return (
+        <Suspense fallback={<LoadingFallback />}>
+          <ExperimentComponent {...experimentProps} />
+        </Suspense>
+      );
+    }
+
+    return null;
+  };
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -169,25 +328,43 @@ export const DriveVisualizer = () => {
       {/* Quick Scan Overview */}
       {quickData && (
         <div className="bg-blue-50 border-b border-blue-200 px-6 py-3">
-          <div className="flex items-center gap-6 text-sm">
-            {quickData.overview.used && quickData.overview.total_quota && (
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-6 text-sm">
+              {quickData.overview.used && quickData.overview.total_quota && (
+                <div>
+                  <span className="text-gray-600">Storage Used: </span>
+                  <span className="font-semibold text-gray-900">
+                    {formatSize(parseInt(quickData.overview.used))} / {formatSize(parseInt(quickData.overview.total_quota))}
+                  </span>
+                </div>
+              )}
               <div>
-                <span className="text-gray-600">Storage Used: </span>
-                <span className="font-semibold text-gray-900">
-                  {formatSize(parseInt(quickData.overview.used))} / {formatSize(parseInt(quickData.overview.total_quota))}
-                </span>
+                <span className="text-gray-600">Top Folders: </span>
+                <span className="font-semibold text-gray-900">{quickData.top_folders.length}</span>
               </div>
-            )}
-            <div>
-              <span className="text-gray-600">Top Folders: </span>
-              <span className="font-semibold text-gray-900">{quickData.top_folders.length}</span>
+              {quickData.estimated_total_files && (
+                <div>
+                  <span className="text-gray-600">Estimated Total Files: </span>
+                  <span className="font-semibold text-gray-900">~{quickData.estimated_total_files.toLocaleString()}+</span>
+                </div>
+              )}
             </div>
-            {quickData.estimated_total_files && (
-              <div>
-                <span className="text-gray-600">Estimated Total Files: </span>
-                <span className="font-semibold text-gray-900">~{quickData.estimated_total_files.toLocaleString()}+</span>
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {quickDataUpdatedAt && (
+                <div className="flex items-center gap-1 text-xs text-gray-600">
+                  <Clock size={14} />
+                  <span>Updated {formatTimeAgo(quickDataUpdatedAt)}</span>
+                </div>
+              )}
+              <button
+                onClick={() => handleRefreshCache('quick_scan')}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-blue-700 hover:text-blue-900 hover:bg-blue-100 rounded transition-colors"
+                title="Refresh cache"
+              >
+                <RefreshCw size={14} />
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -226,55 +403,73 @@ export const DriveVisualizer = () => {
       {/* Stats Bar - Only show for full scan results */}
       {displayData && fullResult && (
         <div className="bg-white border-b border-gray-200 px-6 py-3">
-          <div className="flex items-center gap-6 text-sm">
-            <div>
-              <span className="text-gray-600">Total Files: </span>
-              <span className="font-semibold text-gray-900">{displayData.stats.total_files}</span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-6 text-sm">
+              <div>
+                <span className="text-gray-600">Total Files: </span>
+                <span className="font-semibold text-gray-900">{displayData.stats.total_files}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Total Size: </span>
+                <span className="font-semibold text-gray-900">
+                  {formatSize(displayData.stats.total_size)}
+                </span>
+              </div>
+              <div>
+                <span className="text-gray-600">Folders: </span>
+                <span className="font-semibold text-gray-900">{displayData.stats.folder_count}</span>
+              </div>
+              <div>
+                <span className="text-gray-600">Files: </span>
+                <span className="font-semibold text-gray-900">{displayData.stats.file_count}</span>
+              </div>
             </div>
-            <div>
-              <span className="text-gray-600">Total Size: </span>
-              <span className="font-semibold text-gray-900">
-                {formatSize(displayData.stats.total_size)}
-              </span>
-            </div>
-            <div>
-              <span className="text-gray-600">Folders: </span>
-              <span className="font-semibold text-gray-900">{displayData.stats.folder_count}</span>
-            </div>
-            <div>
-              <span className="text-gray-600">Files: </span>
-              <span className="font-semibold text-gray-900">{displayData.stats.file_count}</span>
+            <div className="flex items-center gap-3">
+              {fullDataUpdatedAt && (
+                <div className="flex items-center gap-1 text-xs text-gray-600">
+                  <Clock size={14} />
+                  <span>Updated {formatTimeAgo(fullDataUpdatedAt)}</span>
+                </div>
+              )}
+              <button
+                onClick={() => handleRefreshCache('full_scan')}
+                className="flex items-center gap-1 px-2 py-1 text-xs text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
+                title="Refresh cache"
+              >
+                <RefreshCw size={14} />
+                <span>Refresh</span>
+              </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* View Toggle - Only show for full scan results */}
+      {/* Experiment Selector - Only show for full scan results */}
       {displayData && !isQuickScanData && (
-        <div className="bg-white border-b border-gray-200 px-6 py-2">
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setViewMode('treemap')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                viewMode === 'treemap'
-                  ? 'bg-primary-100 text-primary-700'
-                  : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              <LayoutGrid size={16} />
-              Treemap
-            </button>
-            <button
-              onClick={() => setViewMode('list')}
-              className={`flex items-center gap-2 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
-                viewMode === 'list'
-                  ? 'bg-primary-100 text-primary-700'
-                  : 'text-gray-600 hover:bg-gray-100'
-              }`}
-            >
-              <List size={16} />
-              List
-            </button>
+        <div className="bg-white border-b border-gray-200 px-6 py-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm font-medium text-gray-700 mr-2">View:</span>
+              <select
+                value={currentExperiment}
+                onChange={(e) => setCurrentExperiment(e.target.value as ExperimentType)}
+                className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="folder-first">Folder First</option>
+                <option value="sidebar-tree">Sidebar Tree</option>
+                <option value="breadcrumb">Breadcrumb</option>
+                <option value="size-grid">Size Grid</option>
+                <option value="timeline">Timeline</option>
+                <option value="type-grouped">Type Grouped</option>
+                <option value="search-first">Search First</option>
+                <option value="card-view">Card View</option>
+                <option value="sunburst">Sunburst</option>
+                <option value="sankey">Sankey</option>
+                <option value="treemap">Treemap (Original)</option>
+                <option value="list">List (Original)</option>
+              </select>
+            </div>
+            <ExperimentFeedback experiment={currentExperiment} />
           </div>
         </div>
       )}
@@ -369,22 +564,10 @@ export const DriveVisualizer = () => {
         </div>
       )}
 
-      {/* Visualization - Only show for full scan results */}
+      {/* Visualization Experiments - Only show for full scan results */}
       {displayData && !isLoading && !isQuickScanData && (
         <div className="flex-1 overflow-hidden">
-          {viewMode === 'treemap' ? (
-            <TreemapView
-              files={displayData.files}
-              childrenMap={displayData.children_map}
-              onFileClick={handleFileClick}
-            />
-          ) : (
-            <ListView
-              files={displayData.files}
-              childrenMap={displayData.children_map}
-              onFileClick={handleFileClick}
-            />
-          )}
+          {renderExperiment(displayData)}
         </div>
       )}
 
@@ -406,4 +589,3 @@ export const DriveVisualizer = () => {
     </div>
   );
 };
-

@@ -46,6 +46,14 @@ export const api = {
     const response = await apiClient.get<ScanResponse>('/api/scan');
     return response.data;
   },
+
+  /** Invalidate cache */
+  invalidateCache: async (scanType?: 'quick_scan' | 'full_scan'): Promise<{ message: string }> => {
+    const response = await apiClient.delete<{ message: string }>('/api/cache', {
+      params: scanType ? { scan_type: scanType } : undefined
+    });
+    return response.data;
+  },
 };
 
 export default apiClient;

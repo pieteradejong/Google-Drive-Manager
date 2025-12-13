@@ -1,6 +1,7 @@
 """Core Google Drive API operations."""
 from collections import defaultdict
 from typing import Dict, List, Any, Optional
+from datetime import datetime
 
 
 def list_all_files(service) -> List[Dict[str, Any]]:
@@ -209,6 +210,41 @@ def get_top_level_folders(service) -> tuple[List[Dict[str, Any]], Optional[int]]
         folder['calculatedSize'] = 0
     
     return folders, estimated_total
+
+
+def check_recently_modified(service, since_timestamp: datetime, limit: int = 10) -> List[Dict[str, Any]]:
+    """
+    Check for files modified since a given timestamp.
+    
+    This is used for cache invalidation - if any files have been modified
+    since the cache was created, the cache should be invalidated.
+    
+    Args:
+        service: Authenticated Google Drive API service
+        since_timestamp: Datetime to check for modifications after
+        limit: Maximum number of recent files to return
+        
+    Returns:
+        List of recently modified file dictionaries (empty if none found)
+    """
+    try:
+        # Format timestamp for Drive API query (RFC 3339 format)
+        # Drive API expects format: YYYY-MM-DDTHH:MM:SS
+        timestamp_str = since_timestamp.strftime('%Y-%m-%dT%H:%M:%S')
+        
+        # Query for files modified after the timestamp, ordered by modification time
+        results = service.files().list(
+            q=f"trashed=false and modifiedTime > '{timestamp_str}'",
+            orderBy="modifiedTime desc",
+            pageSize=limit,
+            fields="files(id, name, modifiedTime)"
+        ).execute()
+        
+        return results.get('files', [])
+    except Exception as e:
+        print(f"Error checking recently modified files: {e}")
+        # Return empty list on error - we'll fall back to time-based validation
+        return []
 
 
 

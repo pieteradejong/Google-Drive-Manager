@@ -1,7 +1,7 @@
 """FastAPI application entry point."""
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import uuid
 import asyncio
 from threading import Thread
@@ -11,6 +11,10 @@ from .drive_api import list_all_files, build_tree_structure, get_drive_overview,
 from .models import (
     ScanResponse, HealthResponse, FileItem, DriveStats,
     QuickScanResponse, ScanProgress, FullScanStatusResponse
+)
+from .cache import (
+    load_cache, save_cache, is_cache_valid_time_based,
+    get_cache_metadata, CacheMetadata, validate_cache_with_drive, clear_cache
 )
 
 app = FastAPI(
@@ -59,10 +63,25 @@ async def quick_scan() -> QuickScanResponse:
     - Top-level folders with approximate sizes
     - Estimate of total files
     
+    Uses caching with 1 hour TTL for faster responses.
+    
     Returns:
         QuickScanResponse with overview and top folders
     """
     try:
+        # Check cache first
+        cache_data = load_cache('quick_scan')
+        if cache_data:
+            metadata = CacheMetadata(**cache_data['metadata'])
+            # Quick scan uses simple time-based validation (1 hour TTL)
+            if is_cache_valid_time_based(metadata, max_age_seconds=3600):
+                print("✓ Returning cached quick scan result")
+                # Convert cached data back to QuickScanResponse
+                cached_response = cache_data['data']
+                return QuickScanResponse(**cached_response)
+            else:
+                print("Cache expired, performing fresh quick scan...")
+        
         print("Starting quick scan...")
         service = get_service()
         
@@ -79,11 +98,26 @@ async def quick_scan() -> QuickScanResponse:
         # Convert to FileItem models
         folder_items = [FileItem(**folder) for folder in top_folders]
         
-        return QuickScanResponse(
+        response = QuickScanResponse(
             overview=overview,
             top_folders=folder_items,
             estimated_total_files=estimated_total
         )
+        
+        # Cache the result
+        from datetime import datetime, timezone
+        metadata = CacheMetadata(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            file_count=len(folder_items),
+            total_size=None,
+            cache_version=1
+        )
+        # Convert response to dict for caching
+        response_dict = response.model_dump()
+        save_cache('quick_scan', response_dict, metadata)
+        print("✓ Quick scan result cached")
+        
+        return response
         
     except FileNotFoundError as e:
         if "credentials" in str(e).lower():
@@ -346,7 +380,18 @@ def run_full_scan(scan_id: str):
         )
         _scan_states[scan_id]["result"] = result
         
-        print(f"✓ Full scan {scan_id} complete: {stats.total_files} items")
+        # Cache the result
+        from datetime import datetime, timezone
+        metadata = CacheMetadata(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            file_count=stats.total_files,
+            total_size=stats.total_size,
+            cache_version=1
+        )
+        # Convert result to dict for caching
+        result_dict = result.model_dump()
+        save_cache('full_scan', result_dict, metadata)
+        print(f"✓ Full scan {scan_id} complete: {stats.total_files} items (cached)")
         
     except Exception as e:
         import traceback
@@ -376,10 +421,42 @@ async def start_full_scan() -> Dict[str, str]:
     """
     Start a full background scan of the Drive.
     
+    Checks cache first - if valid cache exists, returns immediately.
+    Otherwise starts background scan.
+    
     Returns:
         Dictionary with scan_id to poll for status
     """
     try:
+        # Check cache first
+        cache_data = load_cache('full_scan')
+        if cache_data:
+            metadata = CacheMetadata(**cache_data['metadata'])
+            service = get_service()
+            # Full scan uses smart validation (7 days TTL + Drive API check)
+            if validate_cache_with_drive(service, metadata, max_age_seconds=604800):
+                print("✓ Valid full scan cache found - using cached result")
+                # Create a scan_id and immediately mark as complete with cached result
+                scan_id = str(uuid.uuid4())
+                cached_response = cache_data['data']
+                result = ScanResponse(**cached_response)
+                
+                # Initialize scan state as complete
+                _scan_states[scan_id] = {
+                    "status": "complete",
+                    "progress": ScanProgress(
+                        scan_id=scan_id,
+                        stage="complete",
+                        progress=100.0,
+                        files_fetched=result.stats.total_files,
+                        message="Scan complete! (from cache)"
+                    ),
+                    "result": result
+                }
+                return {"scan_id": scan_id}
+            else:
+                print("Cache invalid or expired - starting fresh scan...")
+        
         scan_id = str(uuid.uuid4())
         
         # Initialize scan state
@@ -403,6 +480,35 @@ async def start_full_scan() -> Dict[str, str]:
         raise HTTPException(
             status_code=500,
             detail=f"Error starting full scan: {error_detail}"
+        )
+
+
+@app.delete("/api/cache")
+async def invalidate_cache(scan_type: Optional[str] = None) -> Dict[str, str]:
+    """
+    Invalidate cache for scan results.
+    
+    Args:
+        scan_type: 'quick_scan', 'full_scan', or None to clear all caches
+        
+    Returns:
+        Success message
+    """
+    try:
+        if clear_cache(scan_type):
+            if scan_type:
+                return {"message": f"Cache cleared for {scan_type}"}
+            else:
+                return {"message": "All caches cleared"}
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to clear cache"
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error clearing cache: {str(e)}"
         )
 
 

@@ -1,28 +1,44 @@
-/** Hook for quick scan (overview + top folders) */
-import { useState } from 'react';
+/** Hook for quick scan (overview + top folders) using TanStack Query */
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import type { QuickScanResponse } from '../types/drive';
 
 export const useQuickScan = () => {
-  const [data, setData] = useState<QuickScanResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  const queryClient = useQueryClient();
+
+  // Query for quick scan data
+  const {
+    data,
+    isLoading,
+    error,
+    isFetching,
+    dataUpdatedAt
+  } = useQuery<QuickScanResponse, Error>({
+    queryKey: ['quickScan'],
+    queryFn: () => api.quickScan(),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    cacheTime: 60 * 60 * 1000, // 1 hour
+    enabled: false, // Don't fetch automatically
+  });
+
+  // Mutation to trigger scan
+  const scanMutation = useMutation({
+    mutationFn: () => api.quickScan(),
+    onSuccess: (data) => {
+      // Update query cache with new data
+      queryClient.setQueryData(['quickScan'], data);
+    },
+  });
 
   const scan = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await api.quickScan();
-      setData(result);
-      return result;
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error('Unknown error');
-      setError(error);
-      throw error;
-    } finally {
-      setIsLoading(false);
-    }
+    return scanMutation.mutateAsync();
   };
 
-  return { data, isLoading, error, scan };
+  return {
+    data: data || null,
+    isLoading: isLoading || scanMutation.isLoading || isFetching,
+    error: error || scanMutation.error,
+    scan,
+    dataUpdatedAt, // For cache status indicators
+  };
 };

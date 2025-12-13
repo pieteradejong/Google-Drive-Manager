@@ -30,6 +30,7 @@ const FileRow = ({
   onFileClick,
   expandedFolders,
   toggleFolder,
+  visited = new Set<string>(), // Track visited to prevent cycles
 }: {
   file: FileItem;
   level: number;
@@ -38,11 +39,28 @@ const FileRow = ({
   onFileClick?: (file: FileItem) => void;
   expandedFolders: Set<string>;
   toggleFolder: (id: string) => void;
+  visited?: Set<string>; // Track visited to prevent cycles
 }) => {
+  const MAX_DEPTH = 50; // Reasonable limit for folder depth
+  
+  // Prevent infinite loops from circular references
+  if (visited.has(file.id)) {
+    console.warn(`Circular reference detected in list view for ${file.id}`);
+    return null;
+  }
+  
+  // Limit recursion depth
+  if (level > MAX_DEPTH) {
+    return null;
+  }
+  
   const isFolder = file.mimeType === 'application/vnd.google-apps.folder';
   const children = childrenMap[file.id] || [];
   const hasChildren = children.length > 0;
   const isExpanded = expandedFolders.has(file.id);
+  
+  const newVisited = new Set(visited);
+  newVisited.add(file.id);
 
   return (
     <>
@@ -99,6 +117,7 @@ const FileRow = ({
                 onFileClick={onFileClick}
                 expandedFolders={expandedFolders}
                 toggleFolder={toggleFolder}
+                visited={newVisited}
               />
             );
           })}

@@ -96,13 +96,17 @@ class TestQuickScanEndpoint:
         assert data['top_folders'] == []
         assert data['estimated_total_files'] is None
     
+    @patch('backend.main.load_cache')
     @patch('backend.main.get_service')
     def test_quick_scan_authentication_error(
         self,
         mock_get_service,
+        mock_load_cache,
         client
     ):
         """Test quick scan handles authentication errors."""
+        # Ensure no cache is returned
+        mock_load_cache.return_value = None
         mock_get_service.side_effect = FileNotFoundError("credentials.json not found")
         
         response = client.get("/api/scan/quick")
@@ -110,15 +114,19 @@ class TestQuickScanEndpoint:
         assert response.status_code == 500
         assert "credentials" in response.json()['detail'].lower()
     
+    @patch('backend.main.load_cache')
     @patch('backend.main.get_service')
     @patch('backend.main.get_drive_overview')
     def test_quick_scan_api_error(
         self,
         mock_get_overview,
         mock_get_service,
+        mock_load_cache,
         client
     ):
         """Test quick scan handles API errors."""
+        # Ensure no cache is returned
+        mock_load_cache.return_value = None
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
         mock_get_overview.side_effect = Exception("API Error")
