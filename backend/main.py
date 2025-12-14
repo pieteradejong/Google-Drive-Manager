@@ -502,9 +502,9 @@ async def start_full_scan() -> Dict[str, str]:
             service = get_service()
             # Full scan uses smart validation (7 days TTL + Drive API check)
             if validate_cache_with_drive(service, metadata, max_age_seconds=604800):
-                log_operation("full_scan.cache_hit", logger_name="main", scan_id=scan_id)
                 # Create a scan_id and immediately mark as complete with cached result
                 scan_id = str(uuid.uuid4())
+                log_operation("full_scan.cache_hit", logger_name="main", scan_id=scan_id)
                 cached_response = cache_data['data']
                 result = ScanResponse(**cached_response)
                 
