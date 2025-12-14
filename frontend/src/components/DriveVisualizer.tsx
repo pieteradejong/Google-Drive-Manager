@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Loader2, RefreshCw, LayoutGrid, List, AlertCircle, Zap, Database, Clock, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useQuickScan } from '../hooks/useQuickScan';
 import { useFullScan } from '../hooks/useFullScan';
+import { PerformanceIndicator } from './PerformanceIndicator';
 import { useVisualizationStore } from '../stores/visualizationStore';
 import { ListView } from './ListView';
 import { api } from '../api/client';
@@ -95,8 +96,8 @@ export const DriveVisualizer = () => {
     currentFolderId, 
     setCurrentFolderId 
   } = useVisualizationStore();
-  const { data: quickData, isLoading: quickLoading, error: quickError, scan: quickScan, dataUpdatedAt: quickDataUpdatedAt } = useQuickScan();
-  const { progress: fullProgress, result: fullResult, isLoading: fullLoading, error: fullError, startScan: startFullScan, dataUpdatedAt: fullDataUpdatedAt } = useFullScan();
+  const { data: quickData, isLoading: quickLoading, error: quickError, scan: quickScan, dataUpdatedAt: quickDataUpdatedAt, timing: quickTiming } = useQuickScan();
+  const { progress: fullProgress, result: fullResult, isLoading: fullLoading, error: fullError, startScan: startFullScan, dataUpdatedAt: fullDataUpdatedAt, timing: fullTiming } = useFullScan();
   
   const [displayData, setDisplayData] = useState<ScanResponse | null>(null);
   
@@ -299,7 +300,7 @@ export const DriveVisualizer = () => {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
-      {/* Compact Cache Status Banner - Single line combining both */}
+      {/* Compact Cache Status Banner - Single line, minimal refresh options */}
       {hasAnyCache && (
         <div className="bg-amber-50/80 border-b border-amber-200/50 px-4 py-1.5">
           <div className="flex items-center justify-between text-xs">
@@ -315,24 +316,18 @@ export const DriveVisualizer = () => {
                 )}
               </span>
             </div>
-            <div className="flex items-center gap-3 flex-shrink-0">
-              {showQuickCache && (
-                <button
-                  onClick={() => handleRefreshCache('quick_scan')}
-                  className="text-amber-700 hover:text-amber-900 underline text-xs whitespace-nowrap"
-                >
-                  Refresh quick
-                </button>
-              )}
-              {showFullCache && (
-                <button
-                  onClick={handleFullScan}
-                  className="text-amber-700 hover:text-amber-900 underline text-xs whitespace-nowrap"
-                >
-                  Refresh full
-                </button>
-              )}
-            </div>
+            {/* Only show refresh if data is > 10 minutes old */}
+            {(showQuickCache && quickCacheAge > 600000) || (showFullCache && fullCacheAge > 600000) ? (
+              <button
+                onClick={() => {
+                  if (showQuickCache) handleRefreshCache('quick_scan');
+                  if (showFullCache) handleFullScan();
+                }}
+                className="text-amber-700 hover:text-amber-900 underline text-xs whitespace-nowrap"
+              >
+                Refresh
+              </button>
+            ) : null}
           </div>
         </div>
       )}
@@ -364,13 +359,21 @@ export const DriveVisualizer = () => {
                   </>
                 )}
               </button>
-              <p className="text-xs text-gray-500 mt-1 text-center max-w-[140px]">
-                {quickLoading 
-                  ? "Fetching overview..." 
-                  : quickData 
-                    ? "✓ Completed" 
-                    : "Get storage overview & top folders (5-10 sec)"}
-              </p>
+              <div className="mt-1 flex flex-col items-center">
+                <p className="text-xs text-gray-500 text-center max-w-[140px]">
+                  {quickLoading 
+                    ? "Fetching overview..." 
+                    : quickData 
+                      ? "✓ Completed" 
+                      : "Get storage overview & top folders"}
+                </p>
+                <PerformanceIndicator 
+                  timing={quickTiming} 
+                  operationName="Quick Scan"
+                  isRunning={quickLoading}
+                  className="mt-0.5"
+                />
+              </div>
             </div>
 
             {/* Full Scan Button */}
@@ -392,15 +395,23 @@ export const DriveVisualizer = () => {
                   </>
                 )}
               </button>
-              <p className="text-xs text-gray-500 mt-1 text-center max-w-[140px]">
-                {!quickData 
-                  ? "Complete scan of all files (requires quick scan first)"
-                  : fullProgress?.status === 'running'
-                    ? `Scanning... ${Math.round(fullProgress.progress.progress)}%`
-                    : fullResult
-                      ? "✓ Completed"
-                      : "Scan all files & calculate sizes (2-5 min)"}
-              </p>
+              <div className="mt-1 flex flex-col items-center">
+                <p className="text-xs text-gray-500 text-center max-w-[140px]">
+                  {!quickData 
+                    ? "Requires quick scan first"
+                    : fullProgress?.status === 'running'
+                      ? `Scanning... ${Math.round(fullProgress.progress.progress)}%`
+                      : fullResult
+                        ? "✓ Completed"
+                        : "Scan all files & calculate sizes"}
+                </p>
+                <PerformanceIndicator 
+                  timing={fullTiming} 
+                  operationName="Full Scan"
+                  isRunning={fullProgress?.status === 'running' || fullLoading}
+                  className="mt-0.5"
+                />
+              </div>
             </div>
 
             {/* Rescan Button - Only show after full scan completes */}
@@ -446,27 +457,16 @@ export const DriveVisualizer = () => {
                 </div>
               )}
             </div>
-            <div className="flex items-center gap-3">
-              {quickDataUpdatedAt && (
-                <div className="flex items-center gap-1 text-xs">
-                  <Clock size={14} />
-                  <span className={quickDataUpdatedAt && Date.now() - quickDataUpdatedAt > 3600000 ? 'text-amber-600 font-medium' : 'text-gray-600'}>
-                    {Date.now() - quickDataUpdatedAt < 60000 
-                      ? 'Just loaded' 
-                      : `Updated ${formatTimeAgo(quickDataUpdatedAt)}`}
-                    {Date.now() - quickDataUpdatedAt > 3600000 && ' (cached)'}
-                  </span>
-                </div>
-              )}
-              <button
-                onClick={() => handleRefreshCache('quick_scan')}
-                className="flex items-center gap-1 px-2 py-1 text-xs text-blue-700 hover:text-blue-900 hover:bg-blue-100 rounded transition-colors"
-                title="Refresh cache"
-              >
-                <RefreshCw size={14} />
-                <span>Refresh</span>
-              </button>
-            </div>
+            {quickDataUpdatedAt && (
+              <div className="flex items-center gap-1 text-xs text-gray-600">
+                <Clock size={14} />
+                <span>
+                  {Date.now() - quickDataUpdatedAt < 60000 
+                    ? 'Just loaded' 
+                    : `Updated ${formatTimeAgo(quickDataUpdatedAt)}`}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -497,6 +497,16 @@ export const DriveVisualizer = () => {
               {fullProgress.progress.files_fetched && (
                 <span> • {fullProgress.progress.files_fetched.toLocaleString()} files fetched</span>
               )}
+              {/* Show timing information */}
+              {fullTiming.startTime && (
+                <span className="ml-2">
+                  • <PerformanceIndicator 
+                      timing={fullTiming} 
+                      operationName="Full Scan"
+                      isRunning={true}
+                    />
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -526,27 +536,16 @@ export const DriveVisualizer = () => {
                 <span className="font-semibold text-gray-900">{displayData.stats.file_count}</span>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-              {fullDataUpdatedAt && (
-                <div className="flex items-center gap-1 text-xs">
-                  <Clock size={14} />
-                  <span className={fullDataUpdatedAt && Date.now() - fullDataUpdatedAt > 604800000 ? 'text-amber-600 font-medium' : 'text-gray-600'}>
-                    {Date.now() - fullDataUpdatedAt < 60000 
-                      ? 'Just loaded' 
-                      : `Updated ${formatTimeAgo(fullDataUpdatedAt)}`}
-                    {Date.now() - fullDataUpdatedAt > 604800000 && ' (cached)'}
-                  </span>
-                </div>
-              )}
-              <button
-                onClick={() => handleRefreshCache('full_scan')}
-                className="flex items-center gap-1 px-2 py-1 text-xs text-gray-700 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
-                title="Refresh cache"
-              >
-                <RefreshCw size={14} />
-                <span>Refresh</span>
-              </button>
-            </div>
+            {fullDataUpdatedAt && (
+              <div className="flex items-center gap-1 text-xs text-gray-600">
+                <Clock size={14} />
+                <span>
+                  {Date.now() - fullDataUpdatedAt < 60000 
+                    ? 'Just loaded' 
+                    : `Updated ${formatTimeAgo(fullDataUpdatedAt)}`}
+                </span>
+              </div>
+            )}
           </div>
         </div>
       )}
