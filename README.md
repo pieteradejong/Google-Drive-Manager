@@ -6,7 +6,7 @@ A comprehensive tool for analyzing, visualizing, and managing Google Drive stora
 
 - **Quick Scan**: Fast overview of Drive storage and top-level folders (5-10 seconds)
 - **Full Scan**: Complete analysis of all files with folder size calculations (2-5 minutes)
-- **Interactive Visualizations**: Treemap and list views of your Drive structure
+- **Interactive Visualizations**: Multiple visualization modes for exploring your Drive structure
 - **Progress Tracking**: Real-time progress indicators for background scans
 - **Smart Caching**: Intelligent cache invalidation based on Drive changes
 
@@ -103,8 +103,8 @@ This section documents key architectural and design decisions made during develo
   - TanStack Query for server state (planned)
 - **Component Structure**: 
   - `DriveVisualizer`: Main container component
-  - `TreemapView`: D3.js treemap visualization
   - `ListView`: Hierarchical list view
+  - Multiple experiment views: Folder Depth, Duplicate Finder, Orphaned Files, and more
 - **Type Safety**: Full TypeScript coverage with strict type checking
 
 ### Testing Strategy

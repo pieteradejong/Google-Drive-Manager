@@ -10,10 +10,15 @@ export type ExperimentType =
   | 'timeline'
   | 'type-grouped'
   | 'search-first'
-  | 'sunburst'
-  | 'sankey'
   | 'card-view'
-  | 'treemap'
+  | 'storage-dashboard'
+  | 'large-files'
+  | 'duplicate-finder'
+  | 'file-age'
+  | 'folder-depth'
+  | 'activity-timeline'
+  | 'shared-files'
+  | 'orphaned-files'
   | 'list';
 
 interface VisualizationState {
@@ -31,7 +36,7 @@ interface VisualizationState {
 }
 
 export const useVisualizationStore = create<VisualizationState>((set) => ({
-  viewMode: 'treemap',
+  viewMode: 'list',
   setViewMode: (mode) => set({ viewMode: mode }),
   selectedFileId: null,
   setSelectedFileId: (id) => set({ selectedFileId: id }),

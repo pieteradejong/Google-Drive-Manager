@@ -60,7 +60,7 @@ export interface FullScanStatusResponse {
   result?: ScanResponse;
 }
 
-export type ViewMode = 'treemap' | 'list';
+export type ViewMode = 'list';
 
 
 

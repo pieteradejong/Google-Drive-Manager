@@ -4,7 +4,6 @@ import { Loader2, RefreshCw, LayoutGrid, List, AlertCircle, Zap, Database, Clock
 import { useQuickScan } from '../hooks/useQuickScan';
 import { useFullScan } from '../hooks/useFullScan';
 import { useVisualizationStore } from '../stores/visualizationStore';
-import { TreemapView } from './TreemapView';
 import { ListView } from './ListView';
 import { api } from '../api/client';
 import { useQueryClient } from '@tanstack/react-query';
@@ -21,9 +20,15 @@ const SizeGridView = lazy(() => import('./experiments/SizeGridView').then(m => (
 const TimelineView = lazy(() => import('./experiments/TimelineView').then(m => ({ default: m.TimelineView })));
 const TypeGroupedView = lazy(() => import('./experiments/TypeGroupedView').then(m => ({ default: m.TypeGroupedView })));
 const SearchFirstView = lazy(() => import('./experiments/SearchFirstView').then(m => ({ default: m.SearchFirstView })));
-const SunburstView = lazy(() => import('./experiments/SunburstView').then(m => ({ default: m.SunburstView })));
-const SankeyView = lazy(() => import('./experiments/SankeyView').then(m => ({ default: m.SankeyView })));
 const CardFolderView = lazy(() => import('./experiments/CardFolderView').then(m => ({ default: m.CardFolderView })));
+const StorageDashboardView = lazy(() => import('./experiments/StorageDashboardView').then(m => ({ default: m.StorageDashboardView })));
+const LargeFilesView = lazy(() => import('./experiments/LargeFilesView').then(m => ({ default: m.LargeFilesView })));
+const DuplicateFinderView = lazy(() => import('./experiments/DuplicateFinderView').then(m => ({ default: m.DuplicateFinderView })));
+const FileAgeAnalysisView = lazy(() => import('./experiments/FileAgeAnalysisView').then(m => ({ default: m.FileAgeAnalysisView })));
+const FolderDepthView = lazy(() => import('./experiments/FolderDepthView').then(m => ({ default: m.FolderDepthView })));
+const ActivityTimelineView = lazy(() => import('./experiments/ActivityTimelineView').then(m => ({ default: m.ActivityTimelineView })));
+const SharedFilesView = lazy(() => import('./experiments/SharedFilesView').then(m => ({ default: m.SharedFilesView })));
+const OrphanedFilesView = lazy(() => import('./experiments/OrphanedFilesView').then(m => ({ default: m.OrphanedFilesView })));
 
 const formatSize = (bytes: number | string | undefined): string => {
   if (!bytes) return '0 B';
@@ -227,14 +232,31 @@ export const DriveVisualizer = () => {
         ExperimentComponent = CardFolderView;
         experimentProps = { ...commonProps, currentFolderId, onFolderSelect: setCurrentFolderId };
         break;
-      case 'sunburst':
-        ExperimentComponent = SunburstView;
+      case 'storage-dashboard':
+        ExperimentComponent = StorageDashboardView;
+        experimentProps = { ...commonProps, stats: displayData?.overview, quotaInfo: displayData?.quota };
         break;
-      case 'sankey':
-        ExperimentComponent = SankeyView;
+      case 'large-files':
+        ExperimentComponent = LargeFilesView;
         break;
-      case 'treemap':
-        return <TreemapView {...commonProps} />;
+      case 'duplicate-finder':
+        ExperimentComponent = DuplicateFinderView;
+        break;
+      case 'file-age':
+        ExperimentComponent = FileAgeAnalysisView;
+        break;
+      case 'folder-depth':
+        ExperimentComponent = FolderDepthView;
+        break;
+      case 'activity-timeline':
+        ExperimentComponent = ActivityTimelineView;
+        break;
+      case 'shared-files':
+        ExperimentComponent = SharedFilesView;
+        break;
+      case 'orphaned-files':
+        ExperimentComponent = OrphanedFilesView;
+        break;
       case 'list':
         return <ListView {...commonProps} />;
       default:
@@ -252,44 +274,49 @@ export const DriveVisualizer = () => {
     return null;
   };
 
+  // Determine cache status for compact display
+  const quickCacheAge = quickData && quickDataUpdatedAt ? Date.now() - quickDataUpdatedAt : 0;
+  const fullCacheAge = fullResult && fullDataUpdatedAt ? Date.now() - fullDataUpdatedAt : 0;
+  const showQuickCache = quickData && quickCacheAge > 60000;
+  const showFullCache = fullResult && fullCacheAge > 60000;
+  const hasAnyCache = showQuickCache || showFullCache;
+
   return (
     <div className="flex flex-col h-screen bg-gray-50">
-      {/* Cache Notice Banner */}
-      {quickData && quickDataUpdatedAt && Date.now() - quickDataUpdatedAt > 60000 && (
-        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
-              <Clock size={16} className="text-amber-600" />
+      {/* Compact Cache Status Banner - Single line combining both */}
+      {hasAnyCache && (
+        <div className="bg-amber-50/80 border-b border-amber-200/50 px-4 py-1.5">
+          <div className="flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Clock size={12} className="text-amber-600 flex-shrink-0" />
               <span className="text-amber-800">
-                Showing cached data from {formatTimeAgo(quickDataUpdatedAt)}. 
-                {Date.now() - quickDataUpdatedAt > 3600000 && ' Click "Refresh" to get latest data.'}
+                {showQuickCache && showFullCache ? (
+                  <>Cached: Quick {formatTimeAgo(quickDataUpdatedAt)}, Full {formatTimeAgo(fullDataUpdatedAt)}</>
+                ) : showFullCache ? (
+                  <>Cached full scan from {formatTimeAgo(fullDataUpdatedAt)}</>
+                ) : (
+                  <>Cached data from {formatTimeAgo(quickDataUpdatedAt)}</>
+                )}
               </span>
             </div>
-            <button
-              onClick={() => handleRefreshCache('quick_scan')}
-              className="text-amber-700 hover:text-amber-900 underline text-xs"
-            >
-              Refresh now
-            </button>
-          </div>
-        </div>
-      )}
-      {fullResult && fullDataUpdatedAt && Date.now() - fullDataUpdatedAt > 60000 && (
-        <div className="bg-amber-50 border-b border-amber-200 px-6 py-2">
-          <div className="flex items-center justify-between text-sm">
-            <div className="flex items-center gap-2">
-              <Clock size={16} className="text-amber-600" />
-              <span className="text-amber-800">
-                Showing cached full scan from {formatTimeAgo(fullDataUpdatedAt)}. 
-                {Date.now() - fullDataUpdatedAt > 604800000 && ' Click "Full Scan" to refresh.'}
-              </span>
+            <div className="flex items-center gap-3 flex-shrink-0">
+              {showQuickCache && (
+                <button
+                  onClick={() => handleRefreshCache('quick_scan')}
+                  className="text-amber-700 hover:text-amber-900 underline text-xs whitespace-nowrap"
+                >
+                  Refresh quick
+                </button>
+              )}
+              {showFullCache && (
+                <button
+                  onClick={handleFullScan}
+                  className="text-amber-700 hover:text-amber-900 underline text-xs whitespace-nowrap"
+                >
+                  Refresh full
+                </button>
+              )}
             </div>
-            <button
-              onClick={handleFullScan}
-              className="text-amber-700 hover:text-amber-900 underline text-xs"
-            >
-              Run new scan
-            </button>
           </div>
         </div>
       )}
@@ -519,18 +546,29 @@ export const DriveVisualizer = () => {
                 onChange={(e) => setCurrentExperiment(e.target.value as ExperimentType)}
                 className="border border-gray-300 rounded-md px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="folder-first">Folder First</option>
-                <option value="sidebar-tree">Sidebar Tree</option>
-                <option value="breadcrumb">Breadcrumb</option>
-                <option value="size-grid">Size Grid</option>
-                <option value="timeline">Timeline</option>
-                <option value="type-grouped">Type Grouped</option>
-                <option value="search-first">Search First</option>
-                <option value="card-view">Card View</option>
-                <option value="sunburst">Sunburst</option>
-                <option value="sankey">Sankey</option>
-                <option value="treemap">Treemap (Original)</option>
-                <option value="list">List (Original)</option>
+                <optgroup label="Navigation">
+                  <option value="folder-first">Folder First</option>
+                  <option value="sidebar-tree">Sidebar Tree</option>
+                  <option value="breadcrumb">Breadcrumb</option>
+                  <option value="card-view">Card View</option>
+                </optgroup>
+                <optgroup label="Analysis & Insights">
+                  <option value="storage-dashboard">Storage Dashboard</option>
+                  <option value="large-files">Large Files Finder</option>
+                  <option value="duplicate-finder">Duplicate Finder</option>
+                  <option value="file-age">File Age Analysis</option>
+                  <option value="folder-depth">Folder Depth Analysis</option>
+                  <option value="activity-timeline">Activity Timeline</option>
+                  <option value="shared-files">Shared Files</option>
+                  <option value="orphaned-files">Orphaned Files</option>
+                </optgroup>
+                <optgroup label="Visualizations">
+                  <option value="size-grid">Size Grid</option>
+                  <option value="timeline">Timeline</option>
+                  <option value="type-grouped">Type Grouped</option>
+                  <option value="search-first">Search First</option>
+                  <option value="list">List</option>
+                </optgroup>
               </select>
             </div>
             <ExperimentFeedback experiment={currentExperiment} />
