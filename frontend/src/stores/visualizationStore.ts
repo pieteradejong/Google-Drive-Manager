@@ -19,6 +19,10 @@ export type ExperimentType =
   | 'activity-timeline'
   | 'shared-files'
   | 'orphaned-files'
+  | 'folder-tree'
+  | 'semantic-analysis'
+  | 'age-semantic'
+  | 'type-semantic'
   | 'list';
 
 interface VisualizationState {

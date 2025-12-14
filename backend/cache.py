@@ -1,12 +1,17 @@
 """Cache utilities for Drive scan results."""
 import json
 import os
+import time
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from pydantic import BaseModel
 
 from .models import QuickScanResponse, ScanResponse
+from .utils.logger import PerformanceLogger, log_timing
+
+# Performance logger for cache operations
+cache_logger = PerformanceLogger("cache")
 
 
 class CacheMetadata(BaseModel):
@@ -47,12 +52,30 @@ def load_cache(scan_type: str) -> Optional[Dict[str, Any]]:
     if not cache_path.exists():
         return None
     
+    start_time = time.perf_counter()
     try:
+        # Get file size for logging
+        file_size_mb = cache_path.stat().st_size / (1024 * 1024) if cache_path.exists() else 0
+        
         with open(cache_path, 'r') as f:
             cache_data = json.load(f)
+        
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        cache_logger.info(
+            "load_cache",
+            duration_ms=duration_ms,
+            scan_type=scan_type,
+            size_mb=round(file_size_mb, 2)
+        )
         return cache_data
     except (json.JSONDecodeError, IOError) as e:
-        print(f"Error loading cache: {e}")
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        cache_logger.error(
+            "load_cache",
+            duration_ms=duration_ms,
+            message=f"Error loading cache: {str(e)}",
+            scan_type=scan_type
+        )
         # If cache is corrupted, delete it
         try:
             cache_path.unlink()
@@ -74,6 +97,7 @@ def save_cache(scan_type: str, data: Any, metadata: CacheMetadata) -> bool:
         True if successful, False otherwise
     """
     cache_path = get_cache_path(scan_type)
+    start_time = time.perf_counter()
     
     try:
         cache_data = {
@@ -87,9 +111,27 @@ def save_cache(scan_type: str, data: Any, metadata: CacheMetadata) -> bool:
             json.dump(cache_data, f, indent=2)
         
         temp_path.replace(cache_path)
+        
+        # Get file size after saving
+        file_size_mb = cache_path.stat().st_size / (1024 * 1024) if cache_path.exists() else 0
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        
+        cache_logger.info(
+            "save_cache",
+            duration_ms=duration_ms,
+            scan_type=scan_type,
+            size_mb=round(file_size_mb, 2),
+            file_count=metadata.file_count
+        )
         return True
     except Exception as e:
-        print(f"Error saving cache: {e}")
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        cache_logger.error(
+            "save_cache",
+            duration_ms=duration_ms,
+            message=f"Error saving cache: {str(e)}",
+            scan_type=scan_type
+        )
         return False
 
 
@@ -110,7 +152,10 @@ def is_cache_valid_time_based(metadata: CacheMetadata, max_age_seconds: int) -> 
         age_seconds = (now - cache_time).total_seconds()
         return age_seconds < max_age_seconds
     except Exception as e:
-        print(f"Error checking cache validity: {e}")
+        cache_logger.error(
+            "is_cache_valid_time_based",
+            message=f"Error checking cache validity: {str(e)}"
+        )
         return False
 
 
@@ -136,7 +181,11 @@ def clear_cache(scan_type: Optional[str] = None) -> bool:
                 cache_file.unlink()
         return True
     except Exception as e:
-        print(f"Error clearing cache: {e}")
+        cache_logger.error(
+            "clear_cache",
+            message=f"Error clearing cache: {str(e)}",
+            scan_type=scan_type or "all"
+        )
         return False
 
 
@@ -193,13 +242,19 @@ def validate_cache_with_drive(service, cache_metadata: CacheMetadata, max_age_se
         
         if len(recently_modified) == 0:
             # No files modified since cache - cache is still valid!
-            print(f"Cache past TTL but Drive unchanged - cache still valid")
+            cache_logger.info("validate_cache_with_drive", message="Cache past TTL but Drive unchanged - cache still valid")
             return True
         else:
             # Files were modified - cache is invalid
-            print(f"Cache invalidated: {len(recently_modified)} files modified since cache")
+            cache_logger.info(
+                "validate_cache_with_drive",
+                message=f"Cache invalidated: {len(recently_modified)} files modified since cache"
+            )
             return False
     except Exception as e:
         # If Drive API check fails, fall back to time-based validation
-        print(f"Error checking Drive for changes: {e}, falling back to time-based validation")
+        cache_logger.error(
+            "validate_cache_with_drive",
+            message=f"Error checking Drive for changes: {str(e)}, falling back to time-based validation"
+        )
         return False

@@ -29,6 +29,10 @@ const FolderDepthView = lazy(() => import('./experiments/FolderDepthView').then(
 const ActivityTimelineView = lazy(() => import('./experiments/ActivityTimelineView').then(m => ({ default: m.ActivityTimelineView })));
 const SharedFilesView = lazy(() => import('./experiments/SharedFilesView').then(m => ({ default: m.SharedFilesView })));
 const OrphanedFilesView = lazy(() => import('./experiments/OrphanedFilesView').then(m => ({ default: m.OrphanedFilesView })));
+const FolderTreeView = lazy(() => import('./experiments/FolderTreeView').then(m => ({ default: m.FolderTreeView })));
+const SemanticAnalysisView = lazy(() => import('./experiments/SemanticAnalysisView').then(m => ({ default: m.SemanticAnalysisView })));
+const AgeSemanticView = lazy(() => import('./experiments/AgeSemanticView').then(m => ({ default: m.AgeSemanticView })));
+const TypeSemanticView = lazy(() => import('./experiments/TypeSemanticView').then(m => ({ default: m.TypeSemanticView })));
 
 const formatSize = (bytes: number | string | undefined): string => {
   if (!bytes) return '0 B';
@@ -256,6 +260,18 @@ export const DriveVisualizer = () => {
         break;
       case 'orphaned-files':
         ExperimentComponent = OrphanedFilesView;
+        break;
+      case 'folder-tree':
+        ExperimentComponent = FolderTreeView;
+        break;
+      case 'semantic-analysis':
+        ExperimentComponent = SemanticAnalysisView;
+        break;
+      case 'age-semantic':
+        ExperimentComponent = AgeSemanticView;
+        break;
+      case 'type-semantic':
+        ExperimentComponent = TypeSemanticView;
         break;
       case 'list':
         return <ListView {...commonProps} />;
@@ -561,12 +577,16 @@ export const DriveVisualizer = () => {
                   <option value="activity-timeline">Activity Timeline</option>
                   <option value="shared-files">Shared Files</option>
                   <option value="orphaned-files">Orphaned Files</option>
+                  <option value="semantic-analysis">Semantic Analysis</option>
+                  <option value="age-semantic">Age + Semantic</option>
+                  <option value="type-semantic">Type + Semantic</option>
                 </optgroup>
                 <optgroup label="Visualizations">
                   <option value="size-grid">Size Grid</option>
                   <option value="timeline">Timeline</option>
                   <option value="type-grouped">Type Grouped</option>
                   <option value="search-first">Search First</option>
+                  <option value="folder-tree">Folder Tree</option>
                   <option value="list">List</option>
                 </optgroup>
               </select>

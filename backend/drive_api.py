@@ -2,6 +2,11 @@
 from collections import defaultdict
 from typing import Dict, List, Any, Optional
 from datetime import datetime
+import time
+from .utils.logger import timed_operation, log_timing, PerformanceLogger
+
+# Performance logger for drive_api operations
+perf_logger = PerformanceLogger("drive_api")
 
 
 def list_all_files(service) -> List[Dict[str, Any]]:
@@ -17,12 +22,12 @@ def list_all_files(service) -> List[Dict[str, Any]]:
     all_files = []
     page_token = None
     page_count = 0
+    start_time = time.perf_counter()
     
     while True:
         try:
             page_count += 1
-            if page_count % 10 == 0:
-                print(f"  Fetched {len(all_files)} files so far...")
+            page_start = time.perf_counter()
             
             results = service.files().list(
                 q="trashed=false",
@@ -31,18 +36,44 @@ def list_all_files(service) -> List[Dict[str, Any]]:
                 pageToken=page_token
             ).execute()
             
+            page_duration_ms = (time.perf_counter() - page_start) * 1000
+            
             files = results.get('files', [])
             all_files.extend(files)
             page_token = results.get('nextPageToken')
+            
+            # Log every 10 pages or on slow pages
+            if page_count % 10 == 0 or page_duration_ms > 1000:
+                perf_logger.info(
+                    "list_all_files.page_fetch",
+                    duration_ms=page_duration_ms,
+                    page=page_count,
+                    files_so_far=len(all_files)
+                )
             
             if not page_token:
                 break
                 
         except Exception as e:
-            print(f"Error fetching files: {e}")
+            total_duration_ms = (time.perf_counter() - start_time) * 1000
+            perf_logger.error(
+                "list_all_files",
+                duration_ms=total_duration_ms,
+                message=f"Error fetching page {page_count}: {str(e)}",
+                pages_fetched=page_count,
+                files_fetched=len(all_files)
+            )
             import traceback
             traceback.print_exc()
             break
+    
+    total_duration_ms = (time.perf_counter() - start_time) * 1000
+    perf_logger.info(
+        "list_all_files",
+        duration_ms=total_duration_ms,
+        files=len(all_files),
+        pages=page_count
+    )
     
     return all_files
 
@@ -60,14 +91,17 @@ def build_tree_structure(all_files: List[Dict[str, Any]]) -> Dict[str, Any]:
         - file_map: Dictionary mapping file_id to file
         - children_map: Dictionary mapping parent_id to list of child_ids
     """
-    file_map = {f['id']: f for f in all_files}
-    children_map = defaultdict(list)
+    start_time = time.perf_counter()
     
-    # Build parent-child relationships
-    for file in all_files:
-        parents = file.get('parents', [])
-        for parent in parents:
-            children_map[parent].append(file['id'])
+    with log_timing("build_tree_structure.build_maps", files=len(all_files)):
+        file_map = {f['id']: f for f in all_files}
+        children_map = defaultdict(list)
+        
+        # Build parent-child relationships
+        for file in all_files:
+            parents = file.get('parents', [])
+            for parent in parents:
+                children_map[parent].append(file['id'])
     
     # Calculate folder sizes recursively
     def calc_size(file_id: str) -> int:
@@ -90,20 +124,33 @@ def build_tree_structure(all_files: List[Dict[str, Any]]) -> Dict[str, Any]:
         file['calculatedSize'] = total
         return total
     
-    # Calculate sizes for all root items (items with no parents)
-    roots = [f for f in all_files if not f.get('parents')]
-    for root in roots:
-        calc_size(root['id'])
+    with log_timing("build_tree_structure.calc_sizes"):
+        # Calculate sizes for all root items (items with no parents)
+        roots = [f for f in all_files if not f.get('parents')]
+        for root in roots:
+            calc_size(root['id'])
+        
+        # Also calculate sizes for folders that might not be roots
+        # but weren't processed (in case of shared folders)
+        folders = [
+            f for f in all_files 
+            if f['mimeType'] == 'application/vnd.google-apps.folder'
+        ]
+        folders_calculated = 0
+        for folder in folders:
+            if 'calculatedSize' not in folder:
+                calc_size(folder['id'])
+                folders_calculated += 1
     
-    # Also calculate sizes for folders that might not be roots
-    # but weren't processed (in case of shared folders)
-    folders = [
-        f for f in all_files 
-        if f['mimeType'] == 'application/vnd.google-apps.folder'
-    ]
-    for folder in folders:
-        if 'calculatedSize' not in folder:
-            calc_size(folder['id'])
+    total_duration_ms = (time.perf_counter() - start_time) * 1000
+    folder_count = len([f for f in all_files if f['mimeType'] == 'application/vnd.google-apps.folder'])
+    
+    perf_logger.info(
+        "build_tree_structure",
+        duration_ms=total_duration_ms,
+        files=len(all_files),
+        folders=folder_count
+    )
     
     return {
         'files': all_files,
@@ -165,49 +212,66 @@ def get_top_level_folders(service) -> tuple[List[Dict[str, Any]], Optional[int]]
     Returns:
         Tuple of (list of folder dicts, estimated total files count)
     """
+    start_time = time.perf_counter()
     folders = []
     page_token = None
     estimated_total = None
     
     # First, get a sample to estimate total files
-    first_page = service.files().list(
-        q="trashed=false",
-        pageSize=1000,
-        fields="nextPageToken, files(id)"
-    ).execute()
-    
-    # Estimate: if there's a nextPageToken, there are at least 1000 files
-    # We can't know exact count without fetching all, but we can estimate
-    if first_page.get('nextPageToken'):
-        # Conservative estimate: at least 1000, likely more
-        estimated_total = 1000  # Will be refined as we scan
+    with log_timing("get_top_level_folders.estimate"):
+        first_page = service.files().list(
+            q="trashed=false",
+            pageSize=1000,
+            fields="nextPageToken, files(id)"
+        ).execute()
+        
+        # Estimate: if there's a nextPageToken, there are at least 1000 files
+        # We can't know exact count without fetching all, but we can estimate
+        if first_page.get('nextPageToken'):
+            # Conservative estimate: at least 1000, likely more
+            estimated_total = 1000  # Will be refined as we scan
     
     # Now get top-level folders
-    while True:
-        try:
-            results = service.files().list(
-                q="trashed=false and mimeType='application/vnd.google-apps.folder' and 'root' in parents",
-                pageSize=1000,
-                fields="nextPageToken, files(id, name, mimeType, parents, size, createdTime, modifiedTime, webViewLink)",
-                pageToken=page_token
-            ).execute()
-            
-            files = results.get('files', [])
-            folders.extend(files)
-            page_token = results.get('nextPageToken')
-            
-            if not page_token:
-                break
+    with log_timing("get_top_level_folders.fetch"):
+        while True:
+            try:
+                results = service.files().list(
+                    q="trashed=false and mimeType='application/vnd.google-apps.folder' and 'root' in parents",
+                    pageSize=1000,
+                    fields="nextPageToken, files(id, name, mimeType, parents, size, createdTime, modifiedTime, webViewLink)",
+                    pageToken=page_token
+                ).execute()
                 
-        except Exception as e:
-            print(f"Error fetching top-level folders: {e}")
-            break
+                files = results.get('files', [])
+                folders.extend(files)
+                page_token = results.get('nextPageToken')
+                
+                if not page_token:
+                    break
+                    
+            except Exception as e:
+                total_duration_ms = (time.perf_counter() - start_time) * 1000
+                perf_logger.error(
+                    "get_top_level_folders",
+                    duration_ms=total_duration_ms,
+                    message=f"Error fetching folders: {str(e)}",
+                    folders_fetched=len(folders)
+                )
+                break
     
     # For quick scan, we skip size calculation to keep it fast
     # Sizes will be calculated during full scan
     # Set calculatedSize to 0 for now
     for folder in folders:
         folder['calculatedSize'] = 0
+    
+    total_duration_ms = (time.perf_counter() - start_time) * 1000
+    perf_logger.info(
+        "get_top_level_folders",
+        duration_ms=total_duration_ms,
+        folders=len(folders),
+        estimated_total=estimated_total
+    )
     
     return folders, estimated_total
 
@@ -227,6 +291,7 @@ def check_recently_modified(service, since_timestamp: datetime, limit: int = 10)
     Returns:
         List of recently modified file dictionaries (empty if none found)
     """
+    start_time = time.perf_counter()
     try:
         # Format timestamp for Drive API query (RFC 3339 format)
         # Drive API expects format: YYYY-MM-DDTHH:MM:SS
@@ -240,9 +305,22 @@ def check_recently_modified(service, since_timestamp: datetime, limit: int = 10)
             fields="files(id, name, modifiedTime)"
         ).execute()
         
-        return results.get('files', [])
+        files = results.get('files', [])
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        perf_logger.info(
+            "check_recently_modified",
+            duration_ms=duration_ms,
+            files_found=len(files),
+            limit=limit
+        )
+        return files
     except Exception as e:
-        print(f"Error checking recently modified files: {e}")
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        perf_logger.error(
+            "check_recently_modified",
+            duration_ms=duration_ms,
+            message=f"Error: {str(e)}"
+        )
         # Return empty list on error - we'll fall back to time-based validation
         return []
 

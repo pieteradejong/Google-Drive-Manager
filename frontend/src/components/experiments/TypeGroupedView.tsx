@@ -1,8 +1,11 @@
-/** Type-Based Organization - Grouped by file type */
-import { useState } from 'react';
+/** Type-Based Organization - Grouped by file type (Enhanced with charts) */
+import { useState, useMemo } from 'react';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { File, Folder, Image, FileText, Video, Music } from 'lucide-react';
 import { groupByType, formatSize } from '../../utils/navigation';
 import type { FileItem } from '../../types/drive';
+
+const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d'];
 
 interface TypeGroupedViewProps {
   files: FileItem[];
@@ -48,6 +51,18 @@ export const TypeGroupedView = ({ files, childrenMap, onFileClick }: TypeGrouped
     };
   }, [groups]);
   
+  // Prepare chart data
+  const chartData = useMemo(() => {
+    return categories.map((category) => {
+      const stats = getCategoryStats(category);
+      return {
+        name: category,
+        value: stats.totalSize,
+        count: stats.count
+      };
+    }).filter(item => item.value > 0);
+  }, [categories, getCategoryStats]);
+
   return (
     <div className="flex h-full">
       {/* Category Sidebar */}
@@ -84,6 +99,71 @@ export const TypeGroupedView = ({ files, childrenMap, onFileClick }: TypeGrouped
       
       {/* Main Content */}
       <div className="flex-1 overflow-auto p-4">
+        {/* Storage by Type Chart */}
+        {chartData.length > 0 && (
+          <div className="bg-white rounded-lg shadow p-4 mb-4">
+            <h3 className="text-sm font-semibold text-gray-700 mb-3">Storage Distribution by Type</h3>
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie
+                  data={chartData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={80}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {chartData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                  ))}
+                </Pie>
+                <Tooltip formatter={(value: number) => formatSize(value)} />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+        {/* Storage by Type Chart */}
+        {!selectedCategory && (
+          <div className="bg-white rounded-lg border border-gray-200 p-4 mb-6">
+            <h3 className="text-lg font-semibold mb-4">Storage Distribution by Type</h3>
+            {(() => {
+              const chartData = Object.entries(groups).map(([category, items]) => ({
+                name: category,
+                value: items.reduce((sum, f) => sum + (f.calculatedSize || f.size || 0), 0),
+                count: items.length
+              })).filter(d => d.value > 0);
+              
+              return chartData.length > 0 ? (
+                <ResponsiveContainer width="100%" height={300}>
+                  <PieChart>
+                    <Pie
+                      data={chartData}
+                      cx="50%"
+                      cy="50%"
+                      labelLine={false}
+                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                      outerRadius={100}
+                      fill="#8884d8"
+                      dataKey="value"
+                    >
+                      {chartData.map((_entry, index) => (
+                        <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                      ))}
+                    </Pie>
+                    <Tooltip formatter={(value: number) => formatSize(value)} />
+                    <Legend />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="text-center text-gray-500 py-8">No data to display</div>
+              );
+            })()}
+          </div>
+        )}
+
         {selectedCategory && (
           <>
             <div className="mb-4">

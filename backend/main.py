@@ -4,10 +4,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, Optional
 import uuid
 import asyncio
+import time
 from threading import Thread
 
 from .auth import authenticate
 from .drive_api import list_all_files, build_tree_structure, get_drive_overview, get_top_level_folders
+from .utils.logger import PerformanceLogger, log_timing, log_operation
 from .models import (
     ScanResponse, HealthResponse, FileItem, DriveStats,
     QuickScanResponse, ScanProgress, FullScanStatusResponse
@@ -32,11 +34,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Performance tracking middleware
+from .middleware.performance import PerformanceMiddleware
+app.add_middleware(PerformanceMiddleware, slow_request_threshold_ms=1000.0)
+
 # Global service instance (initialized on first use)
 _service = None
 
 # In-memory scan state tracking (use Redis in production)
 _scan_states: Dict[str, Dict[str, Any]] = {}
+
+# Performance logger
+perf_logger = PerformanceLogger("main")
 
 
 def get_service():
@@ -68,6 +77,7 @@ async def quick_scan() -> QuickScanResponse:
     Returns:
         QuickScanResponse with overview and top folders
     """
+    scan_start = time.perf_counter()
     try:
         # Check cache first
         cache_data = load_cache('quick_scan')
@@ -75,25 +85,22 @@ async def quick_scan() -> QuickScanResponse:
             metadata = CacheMetadata(**cache_data['metadata'])
             # Quick scan uses simple time-based validation (1 hour TTL)
             if is_cache_valid_time_based(metadata, max_age_seconds=3600):
-                print("✓ Returning cached quick scan result")
+                log_operation("quick_scan.cache_hit", logger_name="main")
                 # Convert cached data back to QuickScanResponse
                 cached_response = cache_data['data']
                 return QuickScanResponse(**cached_response)
             else:
-                print("Cache expired, performing fresh quick scan...")
+                log_operation("quick_scan.cache_expired", logger_name="main")
         
-        print("Starting quick scan...")
+        log_operation("quick_scan.start", logger_name="main")
         service = get_service()
         
         # Get Drive overview (1 API call)
-        print("Fetching Drive overview...")
-        overview = get_drive_overview(service)
-        print("✓ Overview fetched")
+        with log_timing("quick_scan.get_overview"):
+            overview = get_drive_overview(service)
         
         # Get top-level folders (1-2 API calls)
-        print("Fetching top-level folders...")
         top_folders, estimated_total = get_top_level_folders(service)
-        print(f"✓ Found {len(top_folders)} top-level folders")
         
         # Convert to FileItem models
         folder_items = [FileItem(**folder) for folder in top_folders]
@@ -115,7 +122,14 @@ async def quick_scan() -> QuickScanResponse:
         # Convert response to dict for caching
         response_dict = response.model_dump()
         save_cache('quick_scan', response_dict, metadata)
-        print("✓ Quick scan result cached")
+        
+        total_duration_ms = (time.perf_counter() - scan_start) * 1000
+        perf_logger.info(
+            "quick_scan",
+            duration_ms=total_duration_ms,
+            folders=len(folder_items),
+            estimated_total=estimated_total
+        )
         
         return response
         
@@ -129,6 +143,24 @@ async def quick_scan() -> QuickScanResponse:
             status_code=500,
             detail=f"Authentication error: {str(e)}"
         )
+    except OSError as e:
+        # Network-related errors (connection refused, address in use, etc.)
+        error_msg = str(e)
+        if "Errno 49" in error_msg or "Can't assign requested address" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Network connection error: Unable to connect to Google Drive API. This may be a temporary network issue. Please check your internet connection and try again in a few moments."
+            )
+        elif "Errno 61" in error_msg or "Connection refused" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Network connection error: Connection to Google Drive API was refused. Please check your internet connection and try again."
+            )
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Network error: {error_msg}. Please check your internet connection and try again."
+            )
     except Exception as e:
         import traceback
         error_detail = str(e)
@@ -230,6 +262,24 @@ async def scan_drive() -> ScanResponse:
             status_code=500,
             detail=f"Authentication error: {str(e)}"
         )
+    except OSError as e:
+        # Network-related errors (connection refused, address in use, etc.)
+        error_msg = str(e)
+        if "Errno 49" in error_msg or "Can't assign requested address" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Network connection error: Unable to connect to Google Drive API. This may be a temporary network issue. Please check your internet connection and try again in a few moments."
+            )
+        elif "Errno 61" in error_msg or "Connection refused" in error_msg:
+            raise HTTPException(
+                status_code=503,
+                detail="Network connection error: Connection to Google Drive API was refused. Please check your internet connection and try again."
+            )
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Network error: {error_msg}. Please check your internet connection and try again."
+            )
     except Exception as e:
         import traceback
         error_detail = str(e)
@@ -244,6 +294,8 @@ async def scan_drive() -> ScanResponse:
 
 def run_full_scan(scan_id: str):
     """Run full scan in background thread."""
+    scan_start = time.perf_counter()
+    
     # Ensure scan state exists before starting
     if scan_id not in _scan_states:
         _scan_states[scan_id] = {
@@ -253,6 +305,7 @@ def run_full_scan(scan_id: str):
         }
     
     try:
+        log_operation("full_scan.start", logger_name="main", scan_id=scan_id)
         _scan_states[scan_id]["status"] = "running"
         _scan_states[scan_id]["progress"] = ScanProgress(
             scan_id=scan_id,
@@ -264,68 +317,27 @@ def run_full_scan(scan_id: str):
         service = get_service()
         
         # Fetch all files with progress updates
-        all_files = []
-        page_token = None
-        page_count = 0
+        # Note: list_all_files() now has its own timing, but we still track overall fetch time
+        fetch_start = time.perf_counter()
+        all_files = list_all_files(service)
+        fetch_duration_ms = (time.perf_counter() - fetch_start) * 1000
         
-        # First page to estimate
-        first_results = service.files().list(
-            q="trashed=false",
-            pageSize=1000,
-            fields="nextPageToken, files(id, name, mimeType, parents, size, createdTime, modifiedTime, webViewLink)",
-        ).execute()
-        
-        first_files = first_results.get('files', [])
-        all_files.extend(first_files)
-        page_token = first_results.get('nextPageToken')
-        page_count = 1
-        
-        # Estimate pages (conservative: at least current page count)
-        estimated_pages = 1
-        if page_token:
-            # If there's a next page, estimate based on typical distribution
-            estimated_pages = max(10, len(all_files) // 500)  # Rough estimate
-        
+        # Update progress after fetching
         _scan_states[scan_id]["progress"] = ScanProgress(
             scan_id=scan_id,
             stage="fetching",
-            progress=5.0,
-            current_page=page_count,
-            estimated_pages=estimated_pages,
+            progress=50.0,
             files_fetched=len(all_files),
             message=f"Fetched {len(all_files)} files..."
         )
         
-        # Continue fetching pages
-        while page_token:
-            try:
-                page_count += 1
-                results = service.files().list(
-                    q="trashed=false",
-                    pageSize=1000,
-                    fields="nextPageToken, files(id, name, mimeType, parents, size, createdTime, modifiedTime, webViewLink)",
-                    pageToken=page_token
-                ).execute()
-                
-                files = results.get('files', [])
-                all_files.extend(files)
-                page_token = results.get('nextPageToken')
-                
-                # Update progress (50% for fetching)
-                progress_pct = min(50.0, (page_count / max(estimated_pages, page_count)) * 50)
-                _scan_states[scan_id]["progress"] = ScanProgress(
-                    scan_id=scan_id,
-                    stage="fetching",
-                    progress=progress_pct,
-                    current_page=page_count,
-                    estimated_pages=max(estimated_pages, page_count),
-                    files_fetched=len(all_files),
-                    message=f"Fetched {len(all_files)} files... (page {page_count})"
-                )
-                
-            except Exception as e:
-                print(f"Error fetching page {page_count}: {e}")
-                break
+        fetch_duration_ms = (time.perf_counter() - fetch_start) * 1000
+        perf_logger.info(
+            "full_scan.fetching",
+            duration_ms=fetch_duration_ms,
+            files=len(all_files),
+            scan_id=scan_id
+        )
         
         # Update: building tree (50-75%)
         _scan_states[scan_id]["progress"] = ScanProgress(
@@ -337,7 +349,15 @@ def run_full_scan(scan_id: str):
         )
         
         # Build tree structure
+        tree_start = time.perf_counter()
         tree_data = build_tree_structure(all_files)
+        tree_duration_ms = (time.perf_counter() - tree_start) * 1000
+        perf_logger.info(
+            "full_scan.building_tree",
+            duration_ms=tree_duration_ms,
+            files=len(all_files),
+            scan_id=scan_id
+        )
         
         # Update: calculating sizes (75-95%)
         _scan_states[scan_id]["progress"] = ScanProgress(
@@ -381,6 +401,7 @@ def run_full_scan(scan_id: str):
         _scan_states[scan_id]["result"] = result
         
         # Cache the result
+        cache_start = time.perf_counter()
         from datetime import datetime, timezone
         metadata = CacheMetadata(
             timestamp=datetime.now(timezone.utc).isoformat(),
@@ -391,12 +412,58 @@ def run_full_scan(scan_id: str):
         # Convert result to dict for caching
         result_dict = result.model_dump()
         save_cache('full_scan', result_dict, metadata)
-        print(f"✓ Full scan {scan_id} complete: {stats.total_files} items (cached)")
+        cache_duration_ms = (time.perf_counter() - cache_start) * 1000
         
+        total_duration_ms = (time.perf_counter() - scan_start) * 1000
+        perf_logger.info(
+            "full_scan.complete",
+            duration_ms=total_duration_ms,
+            files=stats.total_files,
+            folders=stats.folder_count,
+            size_gb=stats.total_size / (1024**3),
+            cache_duration_ms=cache_duration_ms,
+            scan_id=scan_id
+        )
+        
+    except OSError as e:
+        # Network-related errors
+        error_msg = str(e)
+        if "Errno 49" in error_msg or "Can't assign requested address" in error_msg:
+            error_detail = "Network connection error: Unable to connect to Google Drive API. This may be a temporary network issue. Please check your internet connection and try again."
+        elif "Errno 61" in error_msg or "Connection refused" in error_msg:
+            error_detail = "Network connection error: Connection to Google Drive API was refused. Please check your internet connection and try again."
+        else:
+            error_detail = f"Network error: {error_msg}. Please check your internet connection and try again."
+        
+        perf_logger.error(
+            "full_scan.network_error",
+            message=error_detail,
+            scan_id=scan_id
+        )
+        
+        # Ensure scan state exists before updating error status
+        if scan_id not in _scan_states:
+            _scan_states[scan_id] = {
+                "status": "error",
+                "progress": None,
+                "result": None
+            }
+        
+        _scan_states[scan_id]["status"] = "error"
+        _scan_states[scan_id]["progress"] = ScanProgress(
+            scan_id=scan_id,
+            stage="error",
+            progress=0.0,
+            message=error_detail
+        )
     except Exception as e:
         import traceback
         error_detail = str(e)
-        print(f"Error in full scan {scan_id}: {error_detail}")
+        perf_logger.error(
+            "full_scan.error",
+            message=f"Error in full scan: {error_detail}",
+            scan_id=scan_id
+        )
         print(traceback.format_exc())
         
         # Ensure scan state exists before updating error status
@@ -435,7 +502,7 @@ async def start_full_scan() -> Dict[str, str]:
             service = get_service()
             # Full scan uses smart validation (7 days TTL + Drive API check)
             if validate_cache_with_drive(service, metadata, max_age_seconds=604800):
-                print("✓ Valid full scan cache found - using cached result")
+                log_operation("full_scan.cache_hit", logger_name="main", scan_id=scan_id)
                 # Create a scan_id and immediately mark as complete with cached result
                 scan_id = str(uuid.uuid4())
                 cached_response = cache_data['data']
@@ -455,7 +522,7 @@ async def start_full_scan() -> Dict[str, str]:
                 }
                 return {"scan_id": scan_id}
             else:
-                print("Cache invalid or expired - starting fresh scan...")
+                log_operation("full_scan.cache_miss", logger_name="main", reason="invalid_or_expired")
         
         scan_id = str(uuid.uuid4())
         
@@ -475,7 +542,10 @@ async def start_full_scan() -> Dict[str, str]:
     except Exception as e:
         import traceback
         error_detail = str(e)
-        print(f"Error starting full scan: {error_detail}")
+        perf_logger.error(
+            "start_full_scan",
+            message=f"Error starting full scan: {error_detail}"
+        )
         print(traceback.format_exc())
         raise HTTPException(
             status_code=500,
@@ -550,8 +620,8 @@ async def startup_event():
     """Initialize service on startup."""
     try:
         get_service()
-        print("Google Drive service initialized successfully")
+        log_operation("startup.service_init", logger_name="main", status="success")
     except FileNotFoundError:
-        print("Warning: Google OAuth credentials not found. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars, or add credentials.json to project root.")
+        perf_logger.warning("startup.service_init", message="Google OAuth credentials not found. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars, or add credentials.json to project root.")
     except Exception as e:
-        print(f"Warning: Could not initialize Drive service: {e}")
+        perf_logger.warning("startup.service_init", message=f"Could not initialize Drive service: {str(e)}")

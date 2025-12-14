@@ -1,7 +1,7 @@
-/** Timeline/Chronological View - Organized by modified date */
+/** Timeline/Chronological View - Organized by modified date (Enhanced with activity patterns) */
 import { useState, useMemo } from 'react';
 import { format } from 'date-fns';
-import { File, Folder } from 'lucide-react';
+import { File, Folder, Calendar } from 'lucide-react';
 import { groupByDatePeriod, sortByDate, formatSize } from '../../utils/navigation';
 import type { FileItem } from '../../types/drive';
 
