@@ -23,6 +23,8 @@ interface DepthStats {
 
 export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepthViewProps) => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
+  const [isCalculating, setIsCalculating] = useState(true);
+  const [calcProgress, setCalcProgress] = useState(0);
   
   const toggleExpanded = (folderId: string) => {
     setExpandedFolders(prev => {
@@ -35,37 +37,49 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
       return next;
     });
   };
+
+  // Let React paint before heavy work starts
+  useEffect(() => {
+    setIsCalculating(true);
+    setCalcProgress(0);
+    const t = window.setTimeout(() => {
+      setCalcProgress(10);
+    }, 0);
+    return () => window.clearTimeout(t);
+  }, [files]);
+
   // Calculate depth for each folder
   const folderDepths = useMemo(() => {
-    return measureSync('FolderDepthView: calculateDepths', () => {
+    const result = measureSync('FolderDepthView: calculateDepths', () => {
       const depths = new Map<string, number>();
       const visited = new Set<string>();
-      
+      const fileMap = new Map(files.map(f => [f.id, f]));
+
       const calculateDepth = (folderId: string, currentDepth: number = 0): number => {
         // Prevent cycles
         if (visited.has(folderId)) {
-          return depths.get(folderId) || currentDepth;
+          return depths.get(folderId) ?? currentDepth;
         }
         visited.add(folderId);
         
-        const folder = files.find(f => f.id === folderId);
+        const folder = fileMap.get(folderId);
         if (!folder || folder.mimeType !== 'application/vnd.google-apps.folder') {
           return currentDepth;
         }
         
-        // Get parent depth
-        if (folder.parents.length === 0) {
+        // Root folder
+        if (!folder.parents || folder.parents.length === 0) {
           depths.set(folderId, 0);
           return 0;
         }
         
-        // Calculate max parent depth
+        // Max parent depth (handles multi-parent)
         let maxParentDepth = 0;
         for (const parentId of folder.parents) {
           if (!depths.has(parentId)) {
             calculateDepth(parentId, currentDepth - 1);
           }
-          maxParentDepth = Math.max(maxParentDepth, depths.get(parentId) || 0);
+          maxParentDepth = Math.max(maxParentDepth, depths.get(parentId) ?? 0);
         }
         
         const depth = maxParentDepth + 1;
@@ -74,24 +88,23 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
       };
       
       // Calculate depth for all folders
-      files.forEach(file => {
-        if (file.mimeType === 'application/vnd.google-apps.folder') {
-          calculateDepth(file.id);
+      let processedFolders = 0;
+      const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
+      folders.forEach(folder => {
+        calculateDepth(folder.id);
+        processedFolders++;
+        if (processedFolders % 500 === 0) {
+          setCalcProgress(Math.min(90, (processedFolders / Math.max(folders.length, 1)) * 90));
         }
       });
       
       return depths;
     }, 500); // Warn if >500ms
-    
-    clearInterval(progressInterval);
+
     setCalcProgress(100);
-    
-    setTimeout(() => {
-      setIsCalculating(false);
-    }, 200);
-    
+    window.setTimeout(() => setIsCalculating(false), 150);
     return result;
-  }, [files, childrenMap]);
+  }, [files]);
   
   // Build depth statistics
   const depthStats = useMemo(() => {
@@ -256,8 +269,8 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                   <div
                     className="flex items-center justify-between p-3 hover:bg-gray-50 cursor-pointer"
                     onClick={() => toggleExpanded(folder.id)}
-                  >
-                    <div className="flex items-center gap-3 flex-1 min-w-0">
+              >
+                <div className="flex items-center gap-3 flex-1 min-w-0">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -268,8 +281,8 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       </button>
                       <span className="text-gray-400 font-medium w-6">{index + 1}.</span>
-                      <Folder size={20} className="text-blue-500 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
+                  <Folder size={20} className="text-blue-500 flex-shrink-0" />
+                  <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           {/* Show last 3 path segments for long paths */}
                           {path.length > 3 ? (
@@ -285,9 +298,9 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                           ) : (
                             path.map((name, i) => (
                               <span key={i} className="text-sm">
-                                <span className="font-medium">{name}</span>
-                                {i < path.length - 1 && <span className="text-gray-400 mx-1">/</span>}
-                              </span>
+                          <span className="font-medium">{name}</span>
+                          {i < path.length - 1 && <span className="text-gray-400 mx-1">/</span>}
+                        </span>
                             ))
                           )}
                         </div>
@@ -402,7 +415,7 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                       >
                         Open folder in Drive →
                       </button>
-                    </div>
+                </div>
                   )}
                 </div>
               );

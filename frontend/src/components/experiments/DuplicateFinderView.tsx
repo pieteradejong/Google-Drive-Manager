@@ -2,7 +2,6 @@
 import { useMemo, useState, useEffect } from 'react';
 import { File, Folder, Copy, Trash2, CheckCircle2, XCircle } from 'lucide-react';
 import { formatSize, getFolderPath } from '../../utils/navigation';
-import { measureSync } from '../../utils/performance';
 import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
@@ -22,66 +21,89 @@ interface DuplicateGroup {
 }
 
 export const DuplicateFinderView = ({ files, childrenMap, onFileClick }: DuplicateFinderViewProps) => {
+  void childrenMap; // reserved for future (e.g. folder duplicate detection)
   const [minGroupSize, setMinGroupSize] = useState<number>(2);
   const [minFileSizeMB, setMinFileSizeMB] = useState<number>(0);
   const [isProcessing, setIsProcessing] = useState(true);
   const [processProgress, setProcessProgress] = useState(0);
+  const [duplicateGroups, setDuplicateGroups] = useState<DuplicateGroup[]>([]);
   
-  // Find duplicates: group by name + size
-  const duplicateGroups = useMemo(() => {
-    setIsProcessing(true);
-    setProcessProgress(0);
-    
-    const result = measureSync('DuplicateFinderView: findDuplicates', () => {
-      // Create a map: "name|size" -> [files]
-      const groupsMap = new Map<string, FileItem[]>();
-      const totalFiles = files.length;
-      let processed = 0;
-      
-      files.forEach(file => {
-        // Skip folders for now (could add folder duplicate detection later)
-        if (file.mimeType === 'application/vnd.google-apps.folder') return;
-        
-        const size = file.size || 0;
+  // Find duplicates in small chunks to avoid blocking the UI thread
+  useEffect(() => {
+    let cancelled = false;
+
+    const sleep = (ms: number) => new Promise<void>(resolve => window.setTimeout(resolve, ms));
+
+    const run = async () => {
+      setIsProcessing(true);
+      setProcessProgress(0);
+      setDuplicateGroups([]);
+
+      const startedAt = performance.now();
+
+      // Pre-filter: only non-folders and above min size
+      const candidateFiles = files.filter(f => {
+        if (f.mimeType === 'application/vnd.google-apps.folder') return false;
+        const size = f.size || 0;
         const sizeMB = size / (1024 * 1024);
-        
-        // Filter by minimum file size
-        if (sizeMB < minFileSizeMB) return;
-        
-        const key = `${file.name}|${size}`;
-        if (!groupsMap.has(key)) {
-          groupsMap.set(key, []);
-        }
-        groupsMap.get(key)!.push(file);
-        
-        // Update progress every 1000 files
-        processed++;
-        if (processed % 1000 === 0) {
-          setProcessProgress(Math.min(90, (processed / totalFiles) * 90));
-        }
+        return sizeMB >= minFileSizeMB;
       });
-      
-      setProcessProgress(90);
-      
-      // Convert to array and filter by minimum group size
+
+      const total = candidateFiles.length;
+      const groupsMap = new Map<string, FileItem[]>();
+      // Smaller chunks keep the main thread responsive even on slower machines
+      const chunkSize = 500;
+
+      // Phase 1: build grouping map
+      for (let i = 0; i < total; i += chunkSize) {
+        if (cancelled) return;
+
+        const end = Math.min(i + chunkSize, total);
+        for (let j = i; j < end; j++) {
+          const file = candidateFiles[j];
+          const size = file.size || 0;
+          const key = `${file.name}|${size}`;
+          const list = groupsMap.get(key);
+          if (list) list.push(file);
+          else groupsMap.set(key, [file]);
+        }
+
+        // 0–90% progress
+        const pct = total === 0 ? 90 : Math.min(90, (end / total) * 90);
+        setProcessProgress(pct);
+        // Yield to let the browser paint / keep responsive
+        await sleep(0);
+      }
+
+      // Phase 2: convert map -> groups
+      const entries = Array.from(groupsMap.entries());
       const groups: DuplicateGroup[] = [];
-      groupsMap.forEach((fileList, key) => {
-        if (fileList.length >= minGroupSize) {
-          const [name, sizeStr] = key.split('|');
-          const size = parseInt(sizeStr);
-          // Potential savings: (count - 1) * size (keep one, delete rest)
+      const totalEntries = entries.length;
+
+      for (let i = 0; i < totalEntries; i += chunkSize) {
+        if (cancelled) return;
+
+        const end = Math.min(i + chunkSize, totalEntries);
+        for (let j = i; j < end; j++) {
+          const [key, fileList] = entries[j];
+          if (fileList.length < minGroupSize) continue;
+
+          const sepIndex = key.lastIndexOf('|');
+          const name = sepIndex >= 0 ? key.slice(0, sepIndex) : key;
+          const sizeStr = sepIndex >= 0 ? key.slice(sepIndex + 1) : '0';
+          const size = parseInt(sizeStr, 10) || 0;
+
           const potentialSavings = (fileList.length - 1) * size;
-          
-          // Check if all files have identical metadata (name, size, mimeType, dates)
+
           const firstFile = fileList[0];
-          const identicalMetadata = fileList.every(file => 
+          const identicalMetadata = fileList.every(file =>
             file.name === firstFile.name &&
-            file.size === firstFile.size &&
+            (file.size || 0) === (firstFile.size || 0) &&
             file.mimeType === firstFile.mimeType &&
             file.createdTime === firstFile.createdTime &&
             file.modifiedTime === firstFile.modifiedTime
           );
-          
+
           groups.push({
             name,
             size,
@@ -90,20 +112,35 @@ export const DuplicateFinderView = ({ files, childrenMap, onFileClick }: Duplica
             identicalMetadata
           });
         }
-      });
-      
-      setProcessProgress(95);
-      
-      // Sort by potential savings (largest first)
-      return groups.sort((a, b) => b.potentialSavings - a.potentialSavings);
-    }, 500);
-    
-    setProcessProgress(100);
-    setTimeout(() => {
+
+        // 90–95% progress
+        const pct = totalEntries === 0 ? 95 : 90 + Math.min(5, (end / totalEntries) * 5);
+        setProcessProgress(pct);
+        await sleep(0);
+      }
+
+      // Phase 3: sort (can still be noticeable, but is much smaller than scanning all files)
+      groups.sort((a, b) => b.potentialSavings - a.potentialSavings);
+
+      if (cancelled) return;
+      setDuplicateGroups(groups);
+      setProcessProgress(100);
       setIsProcessing(false);
-    }, 200);
-    
-    return result;
+
+      const durationMs = performance.now() - startedAt;
+      // Useful diagnostic without being too noisy
+      if (durationMs > 1000) {
+        console.warn(`[Performance] DuplicateFinderView computed in ${durationMs.toFixed(0)}ms`, {
+          candidates: total,
+          groups: groups.length
+        });
+      }
+    };
+
+    run();
+    return () => {
+      cancelled = true;
+    };
   }, [files, minGroupSize, minFileSizeMB]);
   
   // Memoize folder paths to avoid recalculating on every render
@@ -212,7 +249,7 @@ export const DuplicateFinderView = ({ files, childrenMap, onFileClick }: Duplica
           </div>
         ) : (
           <div className="space-y-6">
-            {duplicateGroups.map((group, groupIndex) => (
+            {duplicateGroups.map((group) => (
               <div key={`${group.name}-${group.size}`} className="bg-white rounded-lg shadow p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div>

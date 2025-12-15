@@ -563,6 +563,20 @@ if (isAnalyzing) {
 }
 ```
 
+### Main-thread Responsiveness: Chunking + Better Big‑O
+
+**Learning**: A loading UI does *not* prevent Chrome’s “Page Unresponsive” if the heavy work runs synchronously on the main thread. React can’t paint, handle input, or update progress while JavaScript is busy.
+
+**Solutions Applied**:
+- **Chunk long loops** and **yield back to the event loop** (e.g., `setTimeout(0)` / `await sleep(0)`) so the browser can paint and remain responsive.
+  - Applied to **Duplicate Finder**: process files in chunks (e.g., 500) and update progress between chunks.
+- **Avoid accidental \(O(n^2)\) scans** on large datasets.
+  - Applied to **semantic analysis**: replaced repeated `allFiles.find(...)` lookups with a `Map(id → FileItem)` for \(O(1)\) access.
+
+**Key Takeaway**:
+- For very large Drives, the difference between “fast enough” and “tab hangs” is often **(a)** yielding during work and **(b)** avoiding quadratic patterns.
+- If we still hit UI limits, the next step is **Web Workers** (off-main-thread computation) for the heaviest analyses.
+
 ## User Understanding & Context
 
 ### Folder Content Analysis

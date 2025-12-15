@@ -219,3 +219,4 @@ export const VisualizationsDocumentation = ({ onClose }: VisualizationsDocumenta
     </div>
   );
 };
+

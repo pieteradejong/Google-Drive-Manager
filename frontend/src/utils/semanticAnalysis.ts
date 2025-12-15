@@ -113,10 +113,10 @@ export function classifyFolderByName(folderName: string): SemanticCategory | nul
  */
 export function classifyFolderByContent(
   folder: FileItem,
-  children: FileItem[],
-  allFiles: FileItem[]
+  childIds: string[],
+  fileMap: Map<string, FileItem>
 ): SemanticCategory | null {
-  if (children.length === 0) return null;
+  if (childIds.length === 0) return null;
   
   const now = Date.now();
   const oneYearAgo = now - (365 * 24 * 60 * 60 * 1000);
@@ -127,8 +127,8 @@ export function classifyFolderByContent(
   let oldFileCount = 0;
   let totalFiles = 0;
   
-  children.forEach(childId => {
-    const child = allFiles.find(f => f.id === childId);
+  childIds.forEach(childId => {
+    const child = fileMap.get(childId);
     if (!child) return;
     
     // Skip subfolders for this analysis
@@ -191,8 +191,8 @@ export function classifyFolderByContent(
  */
 export function classifyFolder(
   folder: FileItem,
-  children: FileItem[],
-  allFiles: FileItem[]
+  childIds: string[],
+  fileMap: Map<string, FileItem>
 ): { category: SemanticCategory; confidence: 'high' | 'medium' | 'low'; method: 'name' | 'content' } | null {
   // Try name first (higher confidence)
   const nameCategory = classifyFolderByName(folder.name);
@@ -205,7 +205,7 @@ export function classifyFolder(
   }
   
   // Try content analysis
-  const contentCategory = classifyFolderByContent(folder, children, allFiles);
+  const contentCategory = classifyFolderByContent(folder, childIds, fileMap);
   if (contentCategory) {
     return {
       category: contentCategory,
@@ -229,6 +229,7 @@ export function groupFoldersBySemantic(
   uncategorized: FileItem[];
 } {
   return measureSync('semanticAnalysis: groupFoldersBySemantic', () => {
+  const fileMap = new Map(allFiles.map(f => [f.id, f]));
   const categorized: Record<string, {
     folders: FileItem[];
     totalSize: number;
@@ -247,8 +248,8 @@ export function groupFoldersBySemantic(
   });
   
   folders.forEach(folder => {
-    const children = childrenMap[folder.id] || [];
-    const classification = classifyFolder(folder, children, allFiles);
+    const childIds = childrenMap[folder.id] || [];
+    const classification = classifyFolder(folder, childIds, fileMap);
     
     if (classification) {
       const category = categorized[classification.category.name];
