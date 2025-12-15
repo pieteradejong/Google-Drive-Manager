@@ -1,7 +1,9 @@
 /** Duplicate File Finder - Find files with same name and size, showing full paths and metadata */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { File, Folder, Copy, Trash2, CheckCircle2, XCircle } from 'lucide-react';
 import { formatSize, getFolderPath } from '../../utils/navigation';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface DuplicateFinderViewProps {
@@ -22,72 +24,110 @@ interface DuplicateGroup {
 export const DuplicateFinderView = ({ files, childrenMap, onFileClick }: DuplicateFinderViewProps) => {
   const [minGroupSize, setMinGroupSize] = useState<number>(2);
   const [minFileSizeMB, setMinFileSizeMB] = useState<number>(0);
+  const [isProcessing, setIsProcessing] = useState(true);
+  const [processProgress, setProcessProgress] = useState(0);
   
   // Find duplicates: group by name + size
   const duplicateGroups = useMemo(() => {
-    // Create a map: "name|size" -> [files]
-    const groupsMap = new Map<string, FileItem[]>();
+    setIsProcessing(true);
+    setProcessProgress(0);
     
-    files.forEach(file => {
-      // Skip folders for now (could add folder duplicate detection later)
-      if (file.mimeType === 'application/vnd.google-apps.folder') return;
+    const result = measureSync('DuplicateFinderView: findDuplicates', () => {
+      // Create a map: "name|size" -> [files]
+      const groupsMap = new Map<string, FileItem[]>();
+      const totalFiles = files.length;
+      let processed = 0;
       
-      const size = file.size || 0;
-      const sizeMB = size / (1024 * 1024);
-      
-      // Filter by minimum file size
-      if (sizeMB < minFileSizeMB) return;
-      
-      const key = `${file.name}|${size}`;
-      if (!groupsMap.has(key)) {
-        groupsMap.set(key, []);
-      }
-      groupsMap.get(key)!.push(file);
-    });
-    
-    // Convert to array and filter by minimum group size
-    const groups: DuplicateGroup[] = [];
-    groupsMap.forEach((fileList, key) => {
-      if (fileList.length >= minGroupSize) {
-        const [name, sizeStr] = key.split('|');
-        const size = parseInt(sizeStr);
-        // Potential savings: (count - 1) * size (keep one, delete rest)
-        const potentialSavings = (fileList.length - 1) * size;
+      files.forEach(file => {
+        // Skip folders for now (could add folder duplicate detection later)
+        if (file.mimeType === 'application/vnd.google-apps.folder') return;
         
-        // Check if all files have identical metadata (name, size, mimeType, dates)
-        const firstFile = fileList[0];
-        const identicalMetadata = fileList.every(file => 
-          file.name === firstFile.name &&
-          file.size === firstFile.size &&
-          file.mimeType === firstFile.mimeType &&
-          file.createdTime === firstFile.createdTime &&
-          file.modifiedTime === firstFile.modifiedTime
-        );
+        const size = file.size || 0;
+        const sizeMB = size / (1024 * 1024);
         
-        groups.push({
-          name,
-          size,
-          files: fileList,
-          potentialSavings,
-          identicalMetadata
-        });
-      }
-    });
+        // Filter by minimum file size
+        if (sizeMB < minFileSizeMB) return;
+        
+        const key = `${file.name}|${size}`;
+        if (!groupsMap.has(key)) {
+          groupsMap.set(key, []);
+        }
+        groupsMap.get(key)!.push(file);
+        
+        // Update progress every 1000 files
+        processed++;
+        if (processed % 1000 === 0) {
+          setProcessProgress(Math.min(90, (processed / totalFiles) * 90));
+        }
+      });
+      
+      setProcessProgress(90);
+      
+      // Convert to array and filter by minimum group size
+      const groups: DuplicateGroup[] = [];
+      groupsMap.forEach((fileList, key) => {
+        if (fileList.length >= minGroupSize) {
+          const [name, sizeStr] = key.split('|');
+          const size = parseInt(sizeStr);
+          // Potential savings: (count - 1) * size (keep one, delete rest)
+          const potentialSavings = (fileList.length - 1) * size;
+          
+          // Check if all files have identical metadata (name, size, mimeType, dates)
+          const firstFile = fileList[0];
+          const identicalMetadata = fileList.every(file => 
+            file.name === firstFile.name &&
+            file.size === firstFile.size &&
+            file.mimeType === firstFile.mimeType &&
+            file.createdTime === firstFile.createdTime &&
+            file.modifiedTime === firstFile.modifiedTime
+          );
+          
+          groups.push({
+            name,
+            size,
+            files: fileList,
+            potentialSavings,
+            identicalMetadata
+          });
+        }
+      });
+      
+      setProcessProgress(95);
+      
+      // Sort by potential savings (largest first)
+      return groups.sort((a, b) => b.potentialSavings - a.potentialSavings);
+    }, 500);
     
-    // Sort by potential savings (largest first)
-    return groups.sort((a, b) => b.potentialSavings - a.potentialSavings);
+    setProcessProgress(100);
+    setTimeout(() => {
+      setIsProcessing(false);
+    }, 200);
+    
+    return result;
   }, [files, minGroupSize, minFileSizeMB]);
+  
+  // Memoize folder paths to avoid recalculating on every render
+  const pathCache = useMemo(() => {
+    const cache = new Map<string, FileItem[]>();
+    duplicateGroups.forEach(group => {
+      group.files.forEach(file => {
+        if (!cache.has(file.id)) {
+          const parentFolderId = file.parents.length > 0 ? file.parents[0] : null;
+          cache.set(file.id, getFolderPath(parentFolderId, files));
+        }
+      });
+    });
+    return cache;
+  }, [duplicateGroups, files]);
   
   // Calculate total potential savings
   const totalPotentialSavings = useMemo(() => {
     return duplicateGroups.reduce((sum, group) => sum + group.potentialSavings, 0);
   }, [duplicateGroups]);
   
-  // Get full folder path for a file
+  // Get full folder path for a file (from cache)
   const getFullPath = (file: FileItem): FileItem[] => {
-    // Get the first parent folder (files can have multiple parents in Google Drive)
-    const parentFolderId = file.parents.length > 0 ? file.parents[0] : null;
-    return getFolderPath(parentFolderId, files);
+    return pathCache.get(file.id) || [];
   };
   
   // Format path as string
@@ -95,6 +135,18 @@ export const DuplicateFinderView = ({ files, childrenMap, onFileClick }: Duplica
     if (path.length === 0) return 'Root';
     return '/' + path.map(f => f.name).join('/');
   };
+  
+  // Show loading state during processing
+  if (isProcessing) {
+    const fileCount = files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length;
+    return (
+      <LoadingState
+        operation="Finding duplicate files"
+        details={`Analyzing ${fileCount.toLocaleString()} files for duplicates...`}
+        progress={processProgress}
+      />
+    );
+  }
   
   return (
     <div className="flex flex-col h-full">
