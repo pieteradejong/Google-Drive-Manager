@@ -5,6 +5,7 @@ import { hierarchy, tree } from 'd3-hierarchy';
 import { zoom, zoomIdentity } from 'd3-zoom';
 import { formatSize } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface FolderTreeViewProps {
@@ -27,6 +28,8 @@ export const FolderTreeView = ({ files, childrenMap, onFileClick }: FolderTreeVi
   const containerRef = useRef<HTMLDivElement>(null);
   const [maxDepth, setMaxDepth] = useState<number>(5);
   const [orientation, setOrientation] = useState<'vertical' | 'horizontal'>('vertical');
+  const [isBuilding, setIsBuilding] = useState(true);
+  const [buildProgress, setBuildProgress] = useState(0);
   
   // Calculate depth for each folder
   const folderDepths = useMemo(() => {
@@ -73,7 +76,15 @@ export const FolderTreeView = ({ files, childrenMap, onFileClick }: FolderTreeVi
   
   // Build tree structure
   const treeData = useMemo(() => {
-    return measureSync('FolderTreeView: buildTreeData', () => {
+    setIsBuilding(true);
+    setBuildProgress(0);
+    
+    // Simulate progress
+    const progressInterval = setInterval(() => {
+      setBuildProgress(prev => Math.min(prev + 15, 85));
+    }, 150);
+    
+    const result = measureSync('FolderTreeView: buildTreeData', () => {
       const fileMap = new Map(files.map(f => [f.id, f]));
       const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
       
@@ -122,7 +133,27 @@ export const FolderTreeView = ({ files, childrenMap, onFileClick }: FolderTreeVi
       
       return buildNode(rootFolders[0]);
     }, 500); // Warn if >500ms
+    
+    clearInterval(progressInterval);
+    setBuildProgress(100);
+    
+    setTimeout(() => {
+      setIsBuilding(false);
+    }, 200);
+    
+    return result;
   }, [files, childrenMap, folderDepths, maxDepth]);
+  
+  // Show loading state while building
+  if (isBuilding || !treeData) {
+    return (
+      <LoadingState
+        operation="Building folder tree"
+        details={`Processing ${files.length} files...`}
+        progress={buildProgress}
+      />
+    );
+  }
   
   // Color scale based on depth
   const getColor = (depth: number): string => {

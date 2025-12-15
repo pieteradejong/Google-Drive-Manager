@@ -1,10 +1,11 @@
 /** Folder Depth Analysis - Understand folder structure complexity */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { Folder, Layers, TrendingUp, ChevronDown, ChevronRight, File, Image, Video, FileCode, Archive, FileText } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';
 import { analyzeFolderContents, getFolderDescription, type FolderContentSummary } from '../../utils/folderContentAnalyzer';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface FolderDepthViewProps {
@@ -81,6 +82,15 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
       
       return depths;
     }, 500); // Warn if >500ms
+    
+    clearInterval(progressInterval);
+    setCalcProgress(100);
+    
+    setTimeout(() => {
+      setIsCalculating(false);
+    }, 200);
+    
+    return result;
   }, [files, childrenMap]);
   
   // Build depth statistics
@@ -165,6 +175,18 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
     const totalDepth = folders.reduce((sum, f) => sum + (folderDepths.get(f.id) || 0), 0);
     return totalDepth / folders.length;
   }, [files, folderDepths]);
+  
+  // Show loading state while calculating
+  if (isCalculating) {
+    const folderCount = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
+    return (
+      <LoadingState
+        operation="Calculating folder depths"
+        details={`Analyzing ${folderCount} folders...`}
+        progress={calcProgress}
+      />
+    );
+  }
   
   return (
     <div className="flex flex-col h-full overflow-auto p-6 bg-gray-50">

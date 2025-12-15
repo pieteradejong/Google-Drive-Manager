@@ -201,11 +201,44 @@ export const DriveVisualizer = () => {
       onFileClick: handleFileClick,
     };
 
-    const LoadingFallback = () => (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="animate-spin text-primary-600" size={32} />
-      </div>
-    );
+    const LoadingFallback = () => {
+      // Determine what's being loaded based on the experiment
+      const getOperationName = (): string => {
+        switch (currentExperiment) {
+          case 'semantic-analysis':
+          case 'age-semantic':
+          case 'type-semantic':
+            return 'Analyzing folder semantics...';
+          case 'folder-tree':
+            return 'Building folder tree structure...';
+          case 'folder-depth':
+            return 'Calculating folder depths...';
+          case 'duplicate-finder':
+            return 'Finding duplicate files...';
+          case 'storage-dashboard':
+            return 'Building storage dashboard...';
+          default:
+            return 'Loading visualization...';
+        }
+      };
+
+      return (
+        <div className="flex flex-col items-center justify-center h-full bg-gray-50">
+          <Loader2 className="animate-spin text-primary-600 mb-4" size={32} />
+          <div className="text-center">
+            <div className="text-lg font-semibold text-gray-900 mb-2">
+              {getOperationName()}
+            </div>
+            <div className="text-sm text-gray-600">
+              Processing {displayData?.stats.total_files.toLocaleString() || '...'} files
+            </div>
+            <div className="text-xs text-gray-500 mt-4">
+              This may take a moment for large drives...
+            </div>
+          </div>
+        </div>
+      );
+    };
 
     let ExperimentComponent: React.ComponentType<any> | null = null;
     let experimentProps = commonProps;

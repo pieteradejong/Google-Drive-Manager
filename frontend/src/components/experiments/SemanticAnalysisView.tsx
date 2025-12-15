@@ -10,6 +10,7 @@ import {
   type SemanticCategory
 } from '../../utils/semanticAnalysis';
 import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface SemanticAnalysisViewProps {
@@ -24,18 +25,49 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [minSizeMB, setMinSizeMB] = useState<number>(0);
+  const [isAnalyzing, setIsAnalyzing] = useState(true);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
   
   // Get all folders
   const folders = useMemo(() => {
     return files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
   }, [files]);
   
-  // Group folders by semantic category
+  // Group folders by semantic category with progress tracking
   const { categorized, uncategorized } = useMemo(() => {
-    return measureSync('SemanticAnalysisView: groupFoldersBySemantic', () => {
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
+    
+    // Simulate progress for user feedback
+    const progressInterval = setInterval(() => {
+      setAnalysisProgress(prev => Math.min(prev + 10, 90));
+    }, 100);
+    
+    const result = measureSync('SemanticAnalysisView: groupFoldersBySemantic', () => {
       return groupFoldersBySemantic(folders, files, childrenMap);
     }, 500);
+    
+    clearInterval(progressInterval);
+    setAnalysisProgress(100);
+    
+    // Small delay to show completion
+    setTimeout(() => {
+      setIsAnalyzing(false);
+    }, 200);
+    
+    return result;
   }, [folders, files, childrenMap]);
+  
+  // Show loading state during analysis
+  if (isAnalyzing) {
+    return (
+      <LoadingState
+        operation="Analyzing folder semantics"
+        details={`Categorizing ${folders.length} folders...`}
+        progress={analysisProgress}
+      />
+    );
+  }
   
   // Calculate total size for percentage calculations
   const totalDriveSize = useMemo(() => {
