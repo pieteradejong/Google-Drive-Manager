@@ -1,7 +1,9 @@
 /** Folder Health Score - Identify problematic folders */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Activity, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface FolderHealthScoreViewProps {
@@ -36,9 +38,15 @@ const calculateDepth = (
 
 export const FolderHealthScoreView = ({ files, childrenMap, onFileClick }: FolderHealthScoreViewProps) => {
   const [sortBy, setSortBy] = useState<'score' | 'size' | 'files'>('score');
+  const [isAnalyzing, setIsAnalyzing] = useState(true);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
 
   // Calculate health scores for all folders
   const folderHealth = useMemo(() => {
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
+    
+    const result = measureSync('FolderHealthScoreView: calculateHealthScores', () => {
     const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
     const now = Date.now();
     
@@ -108,7 +116,27 @@ export const FolderHealthScoreView = ({ files, childrenMap, onFileClick }: Folde
         avgFileAge
       } as FolderHealth;
     });
+    }, 500);
+    
+    setAnalysisProgress(100);
+    setTimeout(() => {
+      setIsAnalyzing(false);
+    }, 200);
+    
+    return result;
   }, [files, childrenMap]);
+  
+  // Show loading state during analysis
+  if (isAnalyzing) {
+    const folderCount = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
+    return (
+      <LoadingState
+        operation="Calculating folder health scores"
+        details={`Analyzing ${folderCount.toLocaleString()} folders for issues...`}
+        progress={analysisProgress}
+      />
+    );
+  }
 
   // Sort folders
   const sortedFolders = useMemo(() => {

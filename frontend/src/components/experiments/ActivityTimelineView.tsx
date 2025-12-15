@@ -1,7 +1,9 @@
 /** Activity Timeline - Calendar heatmap and activity patterns */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Calendar, TrendingUp, File, Folder } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface ActivityTimelineViewProps {
@@ -13,9 +15,15 @@ interface ActivityTimelineViewProps {
 export const ActivityTimelineView = ({ files, childrenMap, onFileClick }: ActivityTimelineViewProps) => {
   const [viewMode, setViewMode] = useState<'created' | 'modified'>('modified');
   const [timeRange, setTimeRange] = useState<'week' | 'month' | 'year'>('month');
+  const [isProcessing, setIsProcessing] = useState(true);
+  const [processProgress, setProcessProgress] = useState(0);
   
   // Group files by date
   const activityByDate = useMemo(() => {
+    setIsProcessing(true);
+    setProcessProgress(0);
+    
+    const result = measureSync('ActivityTimelineView: groupByDate', () => {
     const activity: Record<string, { created: FileItem[]; modified: FileItem[] }> = {};
     
     files.forEach(file => {
@@ -37,7 +45,26 @@ export const ActivityTimelineView = ({ files, childrenMap, onFileClick }: Activi
     });
     
     return activity;
+    }, 500);
+    
+    setProcessProgress(100);
+    setTimeout(() => {
+      setIsProcessing(false);
+    }, 200);
+    
+    return result;
   }, [files]);
+  
+  // Show loading state during processing
+  if (isProcessing) {
+    return (
+      <LoadingState
+        operation="Building activity timeline"
+        details={`Grouping ${files.length.toLocaleString()} files by date...`}
+        progress={processProgress}
+      />
+    );
+  }
   
   // Get date range
   const dateRange = useMemo(() => {

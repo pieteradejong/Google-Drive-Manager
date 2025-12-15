@@ -1,8 +1,10 @@
 /** File Age Analysis - Find old and unused files */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import { Calendar, Clock, File, Folder } from 'lucide-react';
 import { formatSize, sortByDate } from '../../utils/navigation';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface FileAgeAnalysisViewProps {
@@ -22,9 +24,15 @@ const AGE_BUCKETS = [
 export const FileAgeAnalysisView = ({ files, childrenMap, onFileClick }: FileAgeAnalysisViewProps) => {
   const [ageFilter, setAgeFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'oldest' | 'newest'>('oldest');
+  const [isAnalyzing, setIsAnalyzing] = useState(true);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
   
   // Categorize files by age
   const ageBuckets = useMemo(() => {
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
+    
+    const result = measureSync('FileAgeAnalysisView: categorizeByAge', () => {
     const now = Date.now();
     const buckets: Record<string, { files: FileItem[]; totalSize: number }> = {};
     
@@ -53,7 +61,27 @@ export const FileAgeAnalysisView = ({ files, childrenMap, onFileClick }: FileAge
     });
     
     return buckets;
+    }, 500);
+    
+    setAnalysisProgress(100);
+    setTimeout(() => {
+      setIsAnalyzing(false);
+    }, 200);
+    
+    return result;
   }, [files]);
+  
+  // Show loading state during analysis
+  if (isAnalyzing) {
+    const fileCount = files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length;
+    return (
+      <LoadingState
+        operation="Analyzing file ages"
+        details={`Categorizing ${fileCount.toLocaleString()} files by age...`}
+        progress={analysisProgress}
+      />
+    );
+  }
   
   // Prepare chart data
   const chartData = useMemo(() => {

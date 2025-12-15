@@ -1,7 +1,9 @@
 /** Orphaned Files Detector - Find files with broken parent references */
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { AlertTriangle, File, Folder, Unlink } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface OrphanedFilesViewProps {
@@ -11,6 +13,9 @@ interface OrphanedFilesViewProps {
 }
 
 export const OrphanedFilesView = ({ files, childrenMap, onFileClick }: OrphanedFilesViewProps) => {
+  const [isAnalyzing, setIsAnalyzing] = useState(true);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
+  
   // Create a set of all valid file IDs
   const validFileIds = useMemo(() => {
     return new Set(files.map(f => f.id));
@@ -18,13 +23,38 @@ export const OrphanedFilesView = ({ files, childrenMap, onFileClick }: OrphanedF
   
   // Find orphaned files (files whose parents don't exist)
   const orphanedFiles = useMemo(() => {
-    return files.filter(file => {
-      // Files with no parents are root files, not orphans
-      if (file.parents.length === 0) return false;
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
+    
+    const result = measureSync('OrphanedFilesView: findOrphaned', () => {
+      const orphans: FileItem[] = [];
+      const totalFiles = files.length;
+      let processed = 0;
       
-      // Check if any parent doesn't exist
-      return file.parents.some(parentId => !validFileIds.has(parentId));
-    });
+      files.forEach(file => {
+        // Files with no parents are root files, not orphans
+        if (file.parents.length === 0) return;
+        
+        // Check if any parent doesn't exist
+        if (file.parents.some(parentId => !validFileIds.has(parentId))) {
+          orphans.push(file);
+        }
+        
+        processed++;
+        if (processed % 1000 === 0) {
+          setAnalysisProgress(Math.min(90, (processed / totalFiles) * 90));
+        }
+      });
+      
+      return orphans;
+    }, 500);
+    
+    setAnalysisProgress(100);
+    setTimeout(() => {
+      setIsAnalyzing(false);
+    }, 200);
+    
+    return result;
   }, [files, validFileIds]);
   
   // Group orphaned files by missing parent count
@@ -47,6 +77,17 @@ export const OrphanedFilesView = ({ files, childrenMap, onFileClick }: OrphanedF
   const getMissingParents = (file: FileItem): string[] => {
     return file.parents.filter(parentId => !validFileIds.has(parentId));
   };
+  
+  // Show loading state during analysis
+  if (isAnalyzing) {
+    return (
+      <LoadingState
+        operation="Finding orphaned files"
+        details={`Validating parent references for ${files.length.toLocaleString()} files...`}
+        progress={analysisProgress}
+      />
+    );
+  }
   
   return (
     <div className="flex flex-col h-full overflow-auto p-6 bg-gray-50">

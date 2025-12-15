@@ -1,5 +1,5 @@
 /** Age + Semantic Analysis View - Combine age buckets with semantic categories */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Folder, Calendar, Filter } from 'lucide-react';
 import { formatSize, getFolderPath } from '../../utils/navigation';
 import {
@@ -7,6 +7,8 @@ import {
   getCategoryByName,
   type SemanticCategory
 } from '../../utils/semanticAnalysis';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface AgeSemanticViewProps {
@@ -34,6 +36,8 @@ export const AgeSemanticView = ({ files, childrenMap, onFileClick }: AgeSemantic
   const [selectedCell, setSelectedCell] = useState<{ category: string; ageBucket: string } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedAgeBucket, setSelectedAgeBucket] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(true);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
   
   // Get all folders
   const folders = useMemo(() => {
@@ -42,7 +46,19 @@ export const AgeSemanticView = ({ files, childrenMap, onFileClick }: AgeSemantic
   
   // Group folders by semantic category
   const { categorized } = useMemo(() => {
-    return groupFoldersBySemantic(folders, files, childrenMap);
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
+    
+    const progressInterval = setInterval(() => {
+      setAnalysisProgress(prev => Math.min(prev + 15, 60));
+    }, 150);
+    
+    const result = groupFoldersBySemantic(folders, files, childrenMap);
+    
+    clearInterval(progressInterval);
+    setAnalysisProgress(60);
+    
+    return result;
   }, [folders, files, childrenMap]);
   
   // Build matrix data
@@ -86,6 +102,12 @@ export const AgeSemanticView = ({ files, childrenMap, onFileClick }: AgeSemantic
         }
       });
     });
+    
+    setAnalysisProgress(90);
+    
+    setTimeout(() => {
+      setIsAnalyzing(false);
+    }, 200);
     
     return matrix;
   }, [categorized, selectedCell]);

@@ -1,7 +1,9 @@
 /** Large Files/Folders Finder - Sortable table to find space hogs */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
 import { sortBySize, sortByDate, sortByName, formatSize } from '../../utils/navigation';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface LargeFilesFinderViewProps {
@@ -19,9 +21,15 @@ export const LargeFilesFinderView = ({ files, childrenMap, onFileClick }: LargeF
   const [minSizeMB, setMinSizeMB] = useState<number>(0);
   const [showFolders, setShowFolders] = useState(true);
   const [showFiles, setShowFiles] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(true);
+  const [processProgress, setProcessProgress] = useState(0);
   
   // Filter and sort items
   const filteredAndSorted = useMemo(() => {
+    setIsProcessing(true);
+    setProcessProgress(0);
+    
+    const result = measureSync('LargeFilesFinderView: filterAndSort', () => {
     let filtered = files.filter(f => {
       const size = f.calculatedSize || f.size || 0;
       const sizeMB = size / (1024 * 1024);
@@ -57,7 +65,26 @@ export const LargeFilesFinderView = ({ files, childrenMap, onFileClick }: LargeF
     }
     
     return filtered.slice(0, 1000); // Limit to 1000 items
+    }, 500);
+    
+    setProcessProgress(100);
+    setTimeout(() => {
+      setIsProcessing(false);
+    }, 200);
+    
+    return result;
   }, [files, minSizeMB, showFolders, showFiles, sortField, sortDirection]);
+  
+  // Show loading state during processing
+  if (isProcessing) {
+    return (
+      <LoadingState
+        operation="Filtering and sorting files"
+        details={`Processing ${files.length.toLocaleString()} files...`}
+        progress={processProgress}
+      />
+    );
+  }
   
   const handleSort = (field: SortField) => {
     if (sortField === field) {

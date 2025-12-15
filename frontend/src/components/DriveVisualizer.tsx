@@ -1,9 +1,10 @@
 /** Main Drive visualization component */
 import { useState, useEffect } from 'react';
-import { Loader2, RefreshCw, LayoutGrid, List, AlertCircle, Zap, Database, Clock, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { Loader2, RefreshCw, LayoutGrid, List, AlertCircle, Zap, Database, Clock, ThumbsUp, ThumbsDown, BookOpen } from 'lucide-react';
 import { useQuickScan } from '../hooks/useQuickScan';
 import { useFullScan } from '../hooks/useFullScan';
 import { PerformanceIndicator } from './PerformanceIndicator';
+import { VisualizationsDocumentation } from './VisualizationsDocumentation';
 import { useVisualizationStore } from '../stores/visualizationStore';
 import { ListView } from './ListView';
 import { api } from '../api/client';
@@ -100,6 +101,7 @@ export const DriveVisualizer = () => {
   const { progress: fullProgress, result: fullResult, isLoading: fullLoading, error: fullError, startScan: startFullScan, dataUpdatedAt: fullDataUpdatedAt, timing: fullTiming } = useFullScan();
   
   const [displayData, setDisplayData] = useState<ScanResponse | null>(null);
+  const [showDocumentation, setShowDocumentation] = useState(false);
   
   // Try to load cached full scan on mount
   useEffect(() => {
@@ -587,8 +589,8 @@ export const DriveVisualizer = () => {
       {displayData && !isQuickScanData && (
         <div className="bg-white border-b border-gray-200 px-6 py-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm font-medium text-gray-700 mr-2">View:</span>
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-sm font-medium text-gray-700">View:</span>
               <select
                 value={currentExperiment}
                 onChange={(e) => setCurrentExperiment(e.target.value as ExperimentType)}

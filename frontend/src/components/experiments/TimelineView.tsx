@@ -1,8 +1,10 @@
 /** Timeline/Chronological View - Organized by modified date (Enhanced with activity patterns) */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { format } from 'date-fns';
 import { File, Folder, Calendar } from 'lucide-react';
 import { groupByDatePeriod, sortByDate, formatSize } from '../../utils/navigation';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface TimelineViewProps {
@@ -13,9 +15,26 @@ interface TimelineViewProps {
 
 export const TimelineView = ({ files, childrenMap, onFileClick }: TimelineViewProps) => {
   const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day');
+  const [isProcessing, setIsProcessing] = useState(true);
+  const [processProgress, setProcessProgress] = useState(0);
   
   // Memoize expensive grouping operation
-  const groups = useMemo(() => groupByDatePeriod(files, period), [files, period]);
+  const groups = useMemo(() => {
+    setIsProcessing(true);
+    setProcessProgress(0);
+    
+    const result = measureSync('TimelineView: groupByDatePeriod', () => {
+      return groupByDatePeriod(files, period);
+    }, 500);
+    
+    setProcessProgress(50);
+    
+    setTimeout(() => {
+      setIsProcessing(false);
+    }, 200);
+    
+    return result;
+  }, [files, period]);
   
   // Memoize sorted groups
   const sortedGroups = useMemo(() => {
@@ -31,6 +50,17 @@ export const TimelineView = ({ files, childrenMap, onFileClick }: TimelineViewPr
         return b.date.localeCompare(a.date);
       });
   }, [groups]);
+  
+  // Show loading state during processing
+  if (isProcessing) {
+    return (
+      <LoadingState
+        operation="Grouping files by timeline"
+        details={`Organizing ${files.length.toLocaleString()} files by ${period}...`}
+        progress={processProgress}
+      />
+    );
+  }
   
   const formatDateLabel = (dateStr: string): string => {
     if (dateStr === 'No date') return 'No date';

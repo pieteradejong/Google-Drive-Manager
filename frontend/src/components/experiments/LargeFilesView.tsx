@@ -1,7 +1,9 @@
 /** Large Files/Folders Finder - Sortable table with filters */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { File, Folder, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { sortBySize, sortByDate, sortByName, formatSize } from '../../utils/navigation';
+import { measureSync } from '../../utils/performance';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface LargeFilesViewProps {
@@ -18,9 +20,15 @@ export const LargeFilesView = ({ files, childrenMap, onFileClick }: LargeFilesVi
   const [sortField, setSortField] = useState<SortField>('size');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [fileTypeFilter, setFileTypeFilter] = useState<string>('all');
+  const [isProcessing, setIsProcessing] = useState(true);
+  const [processProgress, setProcessProgress] = useState(0);
   
   // Filter and sort files
   const filteredAndSorted = useMemo(() => {
+    setIsProcessing(true);
+    setProcessProgress(0);
+    
+    const result = measureSync('LargeFilesView: filterAndSort', () => {
     let filtered = files.filter(f => {
       const size = f.calculatedSize || f.size || 0;
       const sizeMB = size / (1024 * 1024);
@@ -57,7 +65,26 @@ export const LargeFilesView = ({ files, childrenMap, onFileClick }: LargeFilesVi
     
     // Limit to top 1000 to prevent DOM overload
     return sorted.slice(0, 1000);
+    }, 500);
+    
+    setProcessProgress(100);
+    setTimeout(() => {
+      setIsProcessing(false);
+    }, 200);
+    
+    return result;
   }, [files, minSizeMB, sortField, sortDirection, fileTypeFilter]);
+  
+  // Show loading state during processing
+  if (isProcessing) {
+    return (
+      <LoadingState
+        operation="Filtering and sorting large files"
+        details={`Processing ${files.length.toLocaleString()} files...`}
+        progress={processProgress}
+      />
+    );
+  }
   
   const handleSort = (field: SortField) => {
     if (sortField === field) {

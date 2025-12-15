@@ -1,5 +1,5 @@
 /** Type + Semantic Analysis View - Combine file types with semantic categories */
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
 import { Folder, File, Filter, Image, Video, Music, FileText } from 'lucide-react';
 import { formatSize, getFolderPath } from '../../utils/navigation';
@@ -7,6 +7,7 @@ import {
   groupFoldersBySemantic,
   getCategoryByName
 } from '../../utils/semanticAnalysis';
+import { LoadingState } from '../LoadingState';
 import type { FileItem } from '../../types/drive';
 
 interface TypeSemanticViewProps {
@@ -35,6 +36,8 @@ export const TypeSemanticView = ({ files, childrenMap, onFileClick }: TypeSemant
   const [selectedCell, setSelectedCell] = useState<{ category: string; fileType: string } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showAllPhotos, setShowAllPhotos] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(true);
+  const [analysisProgress, setAnalysisProgress] = useState(0);
   
   // Get all folders
   const folders = useMemo(() => {
@@ -43,7 +46,19 @@ export const TypeSemanticView = ({ files, childrenMap, onFileClick }: TypeSemant
   
   // Group folders by semantic category
   const { categorized } = useMemo(() => {
-    return groupFoldersBySemantic(folders, files, childrenMap);
+    setIsAnalyzing(true);
+    setAnalysisProgress(0);
+    
+    const progressInterval = setInterval(() => {
+      setAnalysisProgress(prev => Math.min(prev + 15, 60));
+    }, 150);
+    
+    const result = groupFoldersBySemantic(folders, files, childrenMap);
+    
+    clearInterval(progressInterval);
+    setAnalysisProgress(60);
+    
+    return result;
   }, [folders, files, childrenMap]);
   
   // Get file type for a file
@@ -89,8 +104,25 @@ export const TypeSemanticView = ({ files, childrenMap, onFileClick }: TypeSemant
       });
     });
     
+    setAnalysisProgress(90);
+    
+    setTimeout(() => {
+      setIsAnalyzing(false);
+    }, 200);
+    
     return matrix;
   }, [categorized, files, childrenMap, selectedCell]);
+  
+  // Show loading state during analysis
+  if (isAnalyzing) {
+    return (
+      <LoadingState
+        operation="Analyzing file types and semantic categories"
+        details={`Categorizing ${folders.length} folders and analyzing file types...`}
+        progress={analysisProgress}
+      />
+    );
+  }
   
   // Get all photos across all folders (cross-folder aggregation)
   const allPhotos = useMemo(() => {
