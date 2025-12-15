@@ -1,7 +1,7 @@
 """Core Google Drive API operations."""
 from collections import defaultdict
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import time
 from .utils.logger import timed_operation, log_timing, PerformanceLogger
 
@@ -276,9 +276,12 @@ def get_top_level_folders(service) -> tuple[List[Dict[str, Any]], Optional[int]]
     return folders, estimated_total
 
 
-def check_recently_modified(service, since_timestamp: datetime, limit: int = 10) -> List[Dict[str, Any]]:
+def check_recently_modified(service, since_timestamp: datetime, limit: int = 1) -> List[Dict[str, Any]]:
     """
     Check for files modified since a given timestamp.
+    
+    Optimized for cache validation - only needs to know if ANY file changed.
+    Since drives rarely change, this is a fast check (single API call).
     
     This is used for cache invalidation - if any files have been modified
     since the cache was created, the cache should be invalidated.
@@ -286,10 +289,11 @@ def check_recently_modified(service, since_timestamp: datetime, limit: int = 10)
     Args:
         service: Authenticated Google Drive API service
         since_timestamp: Datetime to check for modifications after
-        limit: Maximum number of recent files to return
+        limit: Maximum number of recent files to return (default: 1 for efficiency)
         
     Returns:
         List of recently modified file dictionaries (empty if none found)
+        For cache validation, we only need to know if the list is empty or not
     """
     start_time = time.perf_counter()
     try:
@@ -298,11 +302,12 @@ def check_recently_modified(service, since_timestamp: datetime, limit: int = 10)
         timestamp_str = since_timestamp.strftime('%Y-%m-%dT%H:%M:%S')
         
         # Query for files modified after the timestamp, ordered by modification time
+        # pageSize=1 is enough - we just need to know if ANY file changed
         results = service.files().list(
             q=f"trashed=false and modifiedTime > '{timestamp_str}'",
             orderBy="modifiedTime desc",
-            pageSize=limit,
-            fields="files(id, name, modifiedTime)"
+            pageSize=limit,  # Only need 1 to know if anything changed
+            fields="nextPageToken, files(id, name, modifiedTime)"  # Minimal fields for speed
         ).execute()
         
         files = results.get('files', [])
@@ -311,7 +316,8 @@ def check_recently_modified(service, since_timestamp: datetime, limit: int = 10)
             "check_recently_modified",
             duration_ms=duration_ms,
             files_found=len(files),
-            limit=limit
+            since=since_timestamp.isoformat()[:10],  # Just the date for logging
+            cache_age_days=round((datetime.now(timezone.utc) - since_timestamp).total_seconds() / 86400, 1)
         )
         return files
     except Exception as e:

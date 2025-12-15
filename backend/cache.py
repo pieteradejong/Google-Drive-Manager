@@ -21,6 +21,7 @@ class CacheMetadata(BaseModel):
     total_size: Optional[int] = None
     last_modified: Optional[str] = None  # Most recent file modification time from Drive
     cache_version: int = 1
+    validated_count: int = 0  # How many times this cache has been validated and confirmed valid
 
 
 def get_cache_dir() -> Path:
@@ -209,46 +210,55 @@ def get_cache_metadata(scan_type: str) -> Optional[CacheMetadata]:
         return None
 
 
-def validate_cache_with_drive(service, cache_metadata: CacheMetadata, max_age_seconds: int = 604800) -> bool:
+def validate_cache_with_drive(service, cache_metadata: CacheMetadata, max_age_seconds: int = 2592000) -> bool:
     """
     Validate cache by checking if Drive has been modified since cache was created.
     
-    This is a smart validation that:
-    1. First checks if cache is within TTL (time-based)
-    2. If past TTL, checks Drive API for recently modified files
-    3. If no files modified since cache: cache is still valid
+    Optimized for drives where files rarely change:
+    1. First checks if cache is within TTL (time-based) - default 30 days for rarely-changing drives
+    2. If past TTL, checks Drive API for recently modified files (only 1 API call needed)
+    3. If no files modified since cache: cache is still valid (extends cache indefinitely)
     4. If files modified: cache is invalid
     
     Args:
         service: Authenticated Google Drive API service
         cache_metadata: Cache metadata to validate
-        max_age_seconds: Maximum age in seconds (default: 7 days)
+        max_age_seconds: Maximum age in seconds (default: 30 days) - only used as initial check
         
     Returns:
         True if cache is valid, False if invalid
     """
     from datetime import datetime, timezone
     
-    # First check: Is cache within TTL?
+    # First check: Is cache within TTL? (Fast path - no API call needed)
+    # For rarely-changing drives, we use a longer TTL as initial check
     if is_cache_valid_time_based(cache_metadata, max_age_seconds):
         return True
     
     # Cache is past TTL, but check if Drive actually changed
+    # This is the key optimization: only 1 API call to check for changes
     try:
         from .drive_api import check_recently_modified
         cache_time = datetime.fromisoformat(cache_metadata.timestamp.replace('Z', '+00:00'))
+        
         # Check for files modified since cache was created
-        recently_modified = check_recently_modified(service, cache_time, limit=10)
+        # Limit=1 is enough - we just need to know if ANY file changed
+        recently_modified = check_recently_modified(service, cache_time, limit=1)
         
         if len(recently_modified) == 0:
             # No files modified since cache - cache is still valid!
-            cache_logger.info("validate_cache_with_drive", message="Cache past TTL but Drive unchanged - cache still valid")
+            # This extends cache validity indefinitely until files actually change
+            age_days = (datetime.now(timezone.utc) - cache_time).days
+            cache_logger.info(
+                "validate_cache_with_drive", 
+                message=f"Cache past TTL but Drive unchanged - cache still valid (cache age: {age_days} days)"
+            )
             return True
         else:
             # Files were modified - cache is invalid
             cache_logger.info(
                 "validate_cache_with_drive",
-                message=f"Cache invalidated: {len(recently_modified)} files modified since cache"
+                message=f"Cache invalidated: {len(recently_modified)} file(s) modified since cache"
             )
             return False
     except Exception as e:
@@ -257,4 +267,5 @@ def validate_cache_with_drive(service, cache_metadata: CacheMetadata, max_age_se
             "validate_cache_with_drive",
             message=f"Error checking Drive for changes: {str(e)}, falling back to time-based validation"
         )
-        return False
+        # For safety, if we can't check Drive, invalidate cache older than max_age_seconds
+        return is_cache_valid_time_based(cache_metadata, max_age_seconds)

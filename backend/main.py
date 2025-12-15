@@ -83,14 +83,16 @@ async def quick_scan() -> QuickScanResponse:
         cache_data = load_cache('quick_scan')
         if cache_data:
             metadata = CacheMetadata(**cache_data['metadata'])
-            # Quick scan uses simple time-based validation (1 hour TTL)
-            if is_cache_valid_time_based(metadata, max_age_seconds=3600):
+            service = get_service()
+            # Quick scan uses smart validation: 7 days TTL + Drive API check
+            # Since files rarely change, we can extend cache significantly
+            if validate_cache_with_drive(service, metadata, max_age_seconds=604800):  # 7 days initial TTL
                 log_operation("quick_scan.cache_hit", logger_name="main")
                 # Convert cached data back to QuickScanResponse
                 cached_response = cache_data['data']
                 return QuickScanResponse(**cached_response)
             else:
-                log_operation("quick_scan.cache_expired", logger_name="main")
+                log_operation("quick_scan.cache_miss", logger_name="main", reason="drive_changed")
         
         log_operation("quick_scan.start", logger_name="main")
         service = get_service()
@@ -500,8 +502,9 @@ async def start_full_scan() -> Dict[str, str]:
         if cache_data:
             metadata = CacheMetadata(**cache_data['metadata'])
             service = get_service()
-            # Full scan uses smart validation (7 days TTL + Drive API check)
-            if validate_cache_with_drive(service, metadata, max_age_seconds=604800):
+            # Full scan uses smart validation: 30 days initial TTL + Drive API check
+            # Since files rarely change, cache can persist indefinitely until files actually change
+            if validate_cache_with_drive(service, metadata, max_age_seconds=2592000):  # 30 days initial TTL
                 # Create a scan_id and immediately mark as complete with cached result
                 scan_id = str(uuid.uuid4())
                 log_operation("full_scan.cache_hit", logger_name="main", scan_id=scan_id)
