@@ -109,6 +109,30 @@ export const api = {
       return response.data;
     });
   },
+
+  /** Derived analytics cache status */
+  getAnalyticsStatus: async (): Promise<any> => {
+    return measureAsync('API: analyticsStatus', async () => {
+      const response = await apiClient.get('/api/analytics/status');
+      return response.data;
+    }, 200);
+  },
+
+  /** Start derived analytics computation (if needed) */
+  startAnalytics: async (): Promise<any> => {
+    return measureAsync('API: analyticsStart', async () => {
+      const response = await apiClient.post('/api/analytics/start');
+      return response.data;
+    }, 500);
+  },
+
+  /** Get per-view derived analytics */
+  getAnalyticsView: async (view: string, params?: Record<string, any>): Promise<any> => {
+    return measureAsync(`API: analyticsView:${view}`, async () => {
+      const response = await apiClient.get(`/api/analytics/view/${view}`, { params });
+      return response.data;
+    }, 500);
+  },
 };
 
 export default apiClient;

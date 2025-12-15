@@ -1,11 +1,11 @@
 /** Folder Depth Analysis - Understand folder structure complexity */
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { Folder, Layers, TrendingUp, ChevronDown, ChevronRight, File, Image, Video, FileCode, Archive, FileText } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
-import { measureSync } from '../../utils/performance';
 import { analyzeFolderContents, getFolderDescription, type FolderContentSummary } from '../../utils/folderContentAnalyzer';
 import { LoadingState } from '../LoadingState';
+import { useAnalyticsView } from '../../hooks/useAnalytics';
 import type { FileItem } from '../../types/drive';
 
 interface FolderDepthViewProps {
@@ -23,8 +23,6 @@ interface DepthStats {
 
 export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepthViewProps) => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  const [isCalculating, setIsCalculating] = useState(true);
-  const [calcProgress, setCalcProgress] = useState(0);
   
   const toggleExpanded = (folderId: string) => {
     setExpandedFolders(prev => {
@@ -38,166 +36,76 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
     });
   };
 
-  // Let React paint before heavy work starts
-  useEffect(() => {
-    setIsCalculating(true);
-    setCalcProgress(0);
-    const t = window.setTimeout(() => {
-      setCalcProgress(10);
-    }, 0);
-    return () => window.clearTimeout(t);
+  const analyticsQuery = useAnalyticsView('depths', undefined, true);
+  const analytics = (analyticsQuery.data as any)?.data;
+
+  const fileById = useMemo(() => {
+    const map = new Map<string, FileItem>();
+    files.forEach(f => map.set(f.id, f));
+    return map;
   }, [files]);
 
-  // Calculate depth for each folder
-  const folderDepths = useMemo(() => {
-    const result = measureSync('FolderDepthView: calculateDepths', () => {
-      const depths = new Map<string, number>();
-      const visited = new Set<string>();
-      const fileMap = new Map(files.map(f => [f.id, f]));
+  const depthById: Record<string, number> = analytics?.depth_by_id || {};
+  const distribution: Array<{ depth: number; folder_count: number; total_size: number }> = analytics?.distribution || [];
+  const deepestFolderIds: string[] = analytics?.deepest_folder_ids || [];
 
-      const calculateDepth = (folderId: string, currentDepth: number = 0): number => {
-        // Prevent cycles
-        if (visited.has(folderId)) {
-          return depths.get(folderId) ?? currentDepth;
-        }
-        visited.add(folderId);
-        
-        const folder = fileMap.get(folderId);
-        if (!folder || folder.mimeType !== 'application/vnd.google-apps.folder') {
-          return currentDepth;
-        }
-        
-        // Root folder
-        if (!folder.parents || folder.parents.length === 0) {
-          depths.set(folderId, 0);
-          return 0;
-        }
-        
-        // Max parent depth (handles multi-parent)
-        let maxParentDepth = 0;
-        for (const parentId of folder.parents) {
-          if (!depths.has(parentId)) {
-            calculateDepth(parentId, currentDepth - 1);
-          }
-          maxParentDepth = Math.max(maxParentDepth, depths.get(parentId) ?? 0);
-        }
-        
-        const depth = maxParentDepth + 1;
-        depths.set(folderId, depth);
-        return depth;
-      };
-      
-      // Calculate depth for all folders
-      let processedFolders = 0;
-      const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
-      folders.forEach(folder => {
-        calculateDepth(folder.id);
-        processedFolders++;
-        if (processedFolders % 500 === 0) {
-          setCalcProgress(Math.min(90, (processedFolders / Math.max(folders.length, 1)) * 90));
-        }
-      });
-      
-      return depths;
-    }, 500); // Warn if >500ms
+  const folderDepths = useMemo(() => new Map(Object.entries(depthById).map(([id, d]) => [id, Number(d)])), [depthById]);
 
-    setCalcProgress(100);
-    window.setTimeout(() => setIsCalculating(false), 150);
-    return result;
-  }, [files]);
-  
-  // Build depth statistics
-  const depthStats = useMemo(() => {
-    const stats: Record<number, DepthStats> = {};
-    const deepestPaths: Array<{ path: string[]; folder: FileItem }> = [];
-    
-    files.forEach(file => {
-      if (file.mimeType !== 'application/vnd.google-apps.folder') return;
-      
-      const depth = folderDepths.get(file.id) || 0;
-      
-      if (!stats[depth]) {
-        stats[depth] = {
-          depth,
-          folderCount: 0,
-          totalSize: 0,
-          deepestPaths: []
-        };
-      }
-      
-      stats[depth].folderCount++;
-      stats[depth].totalSize += file.calculatedSize || file.size || 0;
-    });
-    
-    // Find deepest paths
-    const buildPath = (folderId: string, path: string[] = []): string[] => {
-      const folder = files.find(f => f.id === folderId);
-      if (!folder) return path;
-      
-      const newPath = [folder.name, ...path];
-      
-      if (folder.parents.length === 0) {
-        return newPath;
-      }
-      
-      // Follow first parent
-      return buildPath(folder.parents[0], newPath);
-    };
-    
-    // Get top 10 deepest folders
-    const foldersByDepth = Array.from(folderDepths.entries())
-      .map(([id, depth]) => ({ id, depth, folder: files.find(f => f.id === id) }))
-      .filter(item => item.folder)
-      .sort((a, b) => b.depth - a.depth)
-      .slice(0, 10);
-    
-    foldersByDepth.forEach(({ id, depth, folder }) => {
-      if (folder) {
-        const path = buildPath(id).reverse();
-        deepestPaths.push({ path, folder });
-      }
-    });
-    
-    return { stats, deepestPaths };
-  }, [files, folderDepths]);
-  
-  // Prepare chart data
   const chartData = useMemo(() => {
-    const maxDepth = Math.max(...Object.keys(depthStats.stats).map(Number));
-    const data = [];
-    
-    for (let i = 0; i <= maxDepth; i++) {
-      const stat = depthStats.stats[i];
-      if (stat) {
-        data.push({
-          depth: `Level ${i}`,
-          folders: stat.folderCount,
-          size: stat.totalSize
-        });
-      }
-    }
-    
-    return data;
-  }, [depthStats]);
-  
-  // Calculate statistics
-  const maxDepth = Math.max(...Object.keys(depthStats.stats).map(Number), 0);
+    return distribution.map(d => ({
+      depth: `Level ${d.depth}`,
+      folders: d.folder_count,
+      size: d.total_size
+    }));
+  }, [distribution]);
+
+  const maxDepth = analytics?.max_depth ?? 0;
   const avgDepth = useMemo(() => {
-    const folders = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
-    if (folders.length === 0) return 0;
-    const totalDepth = folders.reduce((sum, f) => sum + (folderDepths.get(f.id) || 0), 0);
-    return totalDepth / folders.length;
-  }, [files, folderDepths]);
-  
-  // Show loading state while calculating
-  if (isCalculating) {
-    const folderCount = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
+    const totalFolders = distribution.reduce((sum, d) => sum + d.folder_count, 0);
+    if (!totalFolders) return 0;
+    const weighted = distribution.reduce((sum, d) => sum + d.depth * d.folder_count, 0);
+    return weighted / totalFolders;
+  }, [distribution]);
+
+  const deepestPaths = useMemo(() => {
+    const buildPathNames = (folderId: string): string[] => {
+      const names: string[] = [];
+      const visited = new Set<string>();
+      let current: string | null = folderId;
+      while (current && !visited.has(current)) {
+        visited.add(current);
+        const f = fileById.get(current);
+        if (!f) break;
+        names.push(f.name);
+        const parent = f.parents?.length ? f.parents[0] : null;
+        if (!parent) break;
+        current = parent;
+      }
+      return names.reverse();
+    };
+
+    return deepestFolderIds.slice(0, 10)
+      .map(id => {
+        const folder = fileById.get(id);
+        if (!folder) return null;
+        return { path: buildPathNames(id), folder };
+      })
+      .filter((x): x is { path: string[]; folder: FileItem } => Boolean(x));
+  }, [deepestFolderIds, fileById]);
+
+  if (analyticsQuery.isLoading || analyticsQuery.isFetching) {
     return (
       <LoadingState
-        operation="Calculating folder depths"
-        details={`Analyzing ${folderCount} folders...`}
-        progress={calcProgress}
+        operation="Preparing folder depth analysis"
+        details="Loading cached depth statistics from server..."
       />
+    );
+  }
+  if (analyticsQuery.error) {
+    return (
+      <div className="p-6 text-sm text-red-700">
+        Failed to load depth analytics. Try again in a moment.
+      </div>
     );
   }
   
@@ -259,8 +167,8 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
         <div className="bg-white rounded-lg shadow p-6">
           <h3 className="text-lg font-semibold mb-4">Deepest Folder Paths</h3>
           <div className="space-y-2">
-            {depthStats.deepestPaths.map(({ path, folder }, index) => {
-              const children = (childrenMap[folder.id] || []).map(id => files.find(f => f.id === id)).filter((f): f is FileItem => f !== undefined);
+            {deepestPaths.map(({ path, folder }, index) => {
+              const children = (childrenMap[folder.id] || []).map(id => fileById.get(id)).filter((f): f is FileItem => f !== undefined);
               const contentSummary = analyzeFolderContents(folder, children, files);
               const isExpanded = expandedFolders.has(folder.id);
               
@@ -269,8 +177,8 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                   <div
                     className="flex items-center justify-between p-3 hover:bg-gray-50 cursor-pointer"
                     onClick={() => toggleExpanded(folder.id)}
-              >
-                <div className="flex items-center gap-3 flex-1 min-w-0">
+                  >
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
@@ -281,8 +189,8 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       </button>
                       <span className="text-gray-400 font-medium w-6">{index + 1}.</span>
-                  <Folder size={20} className="text-blue-500 flex-shrink-0" />
-                  <div className="flex-1 min-w-0">
+                      <Folder size={20} className="text-blue-500 flex-shrink-0" />
+                      <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap">
                           {/* Show last 3 path segments for long paths */}
                           {path.length > 3 ? (
@@ -298,9 +206,9 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                           ) : (
                             path.map((name, i) => (
                               <span key={i} className="text-sm">
-                          <span className="font-medium">{name}</span>
-                          {i < path.length - 1 && <span className="text-gray-400 mx-1">/</span>}
-                        </span>
+                                <span className="font-medium">{name}</span>
+                                {i < path.length - 1 && <span className="text-gray-400 mx-1">/</span>}
+                              </span>
                             ))
                           )}
                         </div>
@@ -415,12 +323,12 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                       >
                         Open folder in Drive →
                       </button>
-                </div>
+                    </div>
                   )}
                 </div>
               );
             })}
-            {depthStats.deepestPaths.length === 0 && (
+            {deepestPaths.length === 0 && (
               <div className="text-center text-gray-500 py-8">No deep folders found</div>
             )}
           </div>
@@ -439,15 +347,17 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
                 </tr>
               </thead>
               <tbody>
-                {Object.values(depthStats.stats)
+                {distribution
+                  .slice()
                   .sort((a, b) => a.depth - b.depth)
                   .map(stat => (
                     <tr key={stat.depth} className="border-b border-gray-200">
                       <td className="px-4 py-2">Level {stat.depth}</td>
-                      <td className="px-4 py-2">{stat.folderCount}</td>
-                      <td className="px-4 py-2 font-medium">{formatSize(stat.totalSize)}</td>
+                      <td className="px-4 py-2">{stat.folder_count}</td>
+                      <td className="px-4 py-2 font-medium">{formatSize(stat.total_size)}</td>
                     </tr>
-                  ))}
+                  ))
+                }
               </tbody>
             </table>
           </div>

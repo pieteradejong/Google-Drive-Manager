@@ -23,6 +23,7 @@ export type ExperimentType =
   | 'semantic-analysis'
   | 'age-semantic'
   | 'type-semantic'
+  | 'dag'
   | 'list';
 
 interface VisualizationState {

@@ -1,10 +1,10 @@
-"""Cache utilities for Drive scan results."""
+"""Cache utilities for Drive scan results and derived analytics."""
 import json
 import os
 import time
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Type, TypeVar, Union
 from pydantic import BaseModel
 
 from .models import QuickScanResponse, ScanResponse
@@ -22,6 +22,60 @@ class CacheMetadata(BaseModel):
     last_modified: Optional[str] = None  # Most recent file modification time from Drive
     cache_version: int = 1
     validated_count: int = 0  # How many times this cache has been validated and confirmed valid
+
+
+class AnalyticsCacheMetadata(BaseModel):
+    """
+    Metadata for derived analytics cached from a full_scan cache.
+    
+    The analytics cache is only valid if it matches the current full_scan cache metadata.
+    """
+    # When this analytics cache was computed (ISO datetime)
+    computed_at: str
+    
+    # Which source cache this was computed from
+    source_scan_type: str = "full_scan"
+    source_cache_timestamp: str  # CacheMetadata.timestamp (ISO)
+    source_cache_version: int = 1
+    source_file_count: Optional[int] = None
+    source_total_size: Optional[int] = None
+    
+    # Version of derived analytics structure (bump on breaking changes)
+    derived_version: int = 1
+    
+    # Optional: timings for compute steps (ms)
+    timings_ms: Dict[str, float] = {}
+
+
+TMeta = TypeVar("TMeta", bound=BaseModel)
+
+
+def get_cache_metadata_path(scan_type: str) -> Path:
+    """Sidecar metadata path for a cache file (small, fast to read)."""
+    cache_dir = get_cache_dir()
+    return cache_dir / f'{scan_type}_cache.meta.json'
+
+
+def load_cache_metadata(scan_type: str, model: Type[TMeta]) -> Optional[TMeta]:
+    """Load cache metadata for a given scan_type into a specific Pydantic model."""
+    # Fast path: read sidecar metadata file (avoids loading huge cache JSON)
+    meta_path = get_cache_metadata_path(scan_type)
+    if meta_path.exists():
+        try:
+            with open(meta_path, "r") as f:
+                meta = json.load(f)
+            return model(**meta)
+        except Exception:
+            # Fall through to slow path
+            pass
+
+    cache_data = load_cache(scan_type)
+    if not cache_data or "metadata" not in cache_data:
+        return None
+    try:
+        return model(**cache_data["metadata"])
+    except Exception:
+        return None
 
 
 def get_cache_dir() -> Path:
@@ -112,17 +166,35 @@ def save_cache(scan_type: str, data: Any, metadata: CacheMetadata) -> bool:
             json.dump(cache_data, f, indent=2)
         
         temp_path.replace(cache_path)
+
+        # Write metadata sidecar (small, faster reads for status endpoints)
+        try:
+            meta_path = get_cache_metadata_path(scan_type)
+            meta_tmp = meta_path.with_suffix(".tmp")
+            with open(meta_tmp, "w") as mf:
+                json.dump(metadata.model_dump(), mf, indent=2)
+            meta_tmp.replace(meta_path)
+        except Exception:
+            # Sidecar is best-effort; main cache write succeeded
+            pass
         
         # Get file size after saving
         file_size_mb = cache_path.stat().st_size / (1024 * 1024) if cache_path.exists() else 0
         duration_ms = (time.perf_counter() - start_time) * 1000
         
+        # Best-effort to log a "file_count" field if present
+        file_count = None
+        try:
+            file_count = getattr(metadata, "file_count", None)  # type: ignore[attr-defined]
+        except Exception:
+            file_count = None
+
         cache_logger.info(
             "save_cache",
             duration_ms=duration_ms,
             scan_type=scan_type,
             size_mb=round(file_size_mb, 2),
-            file_count=metadata.file_count
+            file_count=file_count
         )
         return True
     except Exception as e:
@@ -175,11 +247,16 @@ def clear_cache(scan_type: Optional[str] = None) -> bool:
             cache_path = get_cache_path(scan_type)
             if cache_path.exists():
                 cache_path.unlink()
+            meta_path = get_cache_metadata_path(scan_type)
+            if meta_path.exists():
+                meta_path.unlink()
         else:
             # Clear all caches
             cache_dir = get_cache_dir()
             for cache_file in cache_dir.glob('*_cache.json'):
                 cache_file.unlink()
+            for meta_file in cache_dir.glob('*_cache.meta.json'):
+                meta_file.unlink()
         return True
     except Exception as e:
         cache_logger.error(
@@ -200,14 +277,35 @@ def get_cache_metadata(scan_type: str) -> Optional[CacheMetadata]:
     Returns:
         CacheMetadata if cache exists, None otherwise
     """
-    cache_data = load_cache(scan_type)
-    if not cache_data or 'metadata' not in cache_data:
-        return None
-    
+    return load_cache_metadata(scan_type, CacheMetadata)
+
+
+def is_analytics_cache_valid(
+    analytics_metadata: AnalyticsCacheMetadata,
+    source_metadata: CacheMetadata
+) -> bool:
+    """
+    Validate derived analytics cache against the current source (full_scan) cache metadata.
+    """
     try:
-        return CacheMetadata(**cache_data['metadata'])
+        return (
+            analytics_metadata.source_cache_timestamp == source_metadata.timestamp
+            and analytics_metadata.source_cache_version == source_metadata.cache_version
+            and (analytics_metadata.source_file_count is None or analytics_metadata.source_file_count == source_metadata.file_count)
+        )
     except Exception:
-        return None
+        return False
+
+
+def load_full_scan_analytics_cache() -> Optional[Dict[str, Any]]:
+    """Load derived analytics cache if present (raw dict)."""
+    return load_cache("full_scan_analytics")
+
+
+def get_full_scan_analytics_metadata() -> Optional[AnalyticsCacheMetadata]:
+    """Get derived analytics cache metadata, if present."""
+    return load_cache_metadata("full_scan_analytics", AnalyticsCacheMetadata)
+
 
 
 def validate_cache_with_drive(service, cache_metadata: CacheMetadata, max_age_seconds: int = 2592000) -> bool:

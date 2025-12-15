@@ -1,13 +1,13 @@
 /** Type + Semantic Analysis View - Combine file types with semantic categories */
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
-import { Folder, File, Filter, Image, Video, Music, FileText } from 'lucide-react';
-import { formatSize, getFolderPath } from '../../utils/navigation';
+import { File, Filter, Image, Video, Music, FileText } from 'lucide-react';
+import { formatSize } from '../../utils/navigation';
 import {
-  groupFoldersBySemantic,
   getCategoryByName
 } from '../../utils/semanticAnalysis';
 import { LoadingState } from '../LoadingState';
+import { useAnalyticsView } from '../../hooks/useAnalytics';
 import type { FileItem } from '../../types/drive';
 
 interface TypeSemanticViewProps {
@@ -29,100 +29,38 @@ interface MatrixCell {
   fileType: string;
   fileCount: number;
   totalSize: number;
-  files: FileItem[];
 }
 
 export const TypeSemanticView = ({ files, childrenMap, onFileClick }: TypeSemanticViewProps) => {
+  void childrenMap;
   const [selectedCell, setSelectedCell] = useState<{ category: string; fileType: string } | null>(null);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showAllPhotos, setShowAllPhotos] = useState(false);
-  const [isAnalyzing, setIsAnalyzing] = useState(true);
-  const [analysisProgress, setAnalysisProgress] = useState(0);
-  
-  // Get all folders
-  const folders = useMemo(() => {
-    return files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
-  }, [files]);
-  
-  // Group folders by semantic category
-  const { categorized } = useMemo(() => {
-    setIsAnalyzing(true);
-    setAnalysisProgress(0);
-    
-    const progressInterval = setInterval(() => {
-      setAnalysisProgress(prev => Math.min(prev + 15, 60));
-    }, 150);
-    
-    const result = groupFoldersBySemantic(folders, files, childrenMap);
-    
-    clearInterval(progressInterval);
-    setAnalysisProgress(60);
-    
-    return result;
-  }, [folders, files, childrenMap]);
-  
-  // Get file type for a file
-  const getFileType = (file: FileItem): string => {
-    for (const typeCategory of FILE_TYPE_CATEGORIES) {
-      if (typeCategory.pattern.test(file.mimeType)) {
-        return typeCategory.name;
-      }
-    }
-    return 'Other';
-  };
-  
-  // Build matrix data
+
+  const typeSemanticQuery = useAnalyticsView('type_semantic', undefined, true);
+  const typeSemantic = (typeSemanticQuery.data as any)?.data;
+  const semanticQuery = useAnalyticsView('semantic', undefined, true);
+
+  const categories = useMemo(() => {
+    const keys = Object.keys(typeSemantic?.matrix || {});
+    return keys.filter(k => k !== 'Uncategorized');
+  }, [typeSemantic]);
+
   const matrixData = useMemo(() => {
     const matrix: MatrixCell[] = [];
-    const fileMap = new Map(files.map(f => [f.id, f]));
-    
-    // Process each category
-    Object.entries(categorized).forEach(([categoryName, categoryData]) => {
-      // Get all files in folders of this category
-      const categoryFiles: FileItem[] = [];
-      categoryData.folders.forEach(folder => {
-        const children = (childrenMap[folder.id] || [])
-          .map(id => fileMap.get(id))
-          .filter((f): f is FileItem => f !== undefined && f.mimeType !== 'application/vnd.google-apps.folder');
-        categoryFiles.push(...children);
-      });
-      
-      // Group by file type
-      FILE_TYPE_CATEGORIES.forEach(fileTypeCategory => {
-        const matchingFiles = categoryFiles.filter(f => getFileType(f) === fileTypeCategory.name);
-        
-        if (matchingFiles.length > 0 || selectedCell?.category === categoryName || selectedCell?.fileType === fileTypeCategory.name) {
-          const totalSize = matchingFiles.reduce((sum, f) => sum + (f.size || 0), 0);
-          matrix.push({
-            category: categoryName,
-            fileType: fileTypeCategory.name,
-            fileCount: matchingFiles.length,
-            totalSize,
-            files: matchingFiles
-          });
-        }
+    const m = typeSemantic?.matrix || {};
+    Object.entries(m).forEach(([category, groups]) => {
+      Object.entries(groups as any).forEach(([fileType, cell]) => {
+        matrix.push({
+          category,
+          fileType,
+          fileCount: (cell as any).file_count ?? 0,
+          totalSize: (cell as any).total_size ?? 0,
+        });
       });
     });
-    
-    setAnalysisProgress(90);
-    
-    setTimeout(() => {
-      setIsAnalyzing(false);
-    }, 200);
-    
     return matrix;
-  }, [categorized, files, childrenMap, selectedCell]);
-  
-  // Show loading state during analysis
-  if (isAnalyzing) {
-    return (
-      <LoadingState
-        operation="Analyzing file types and semantic categories"
-        details={`Categorizing ${folders.length} folders and analyzing file types...`}
-        progress={analysisProgress}
-      />
-    );
-  }
+  }, [typeSemantic]);
   
   // Get all photos across all folders (cross-folder aggregation)
   const allPhotos = useMemo(() => {
@@ -132,34 +70,20 @@ export const TypeSemanticView = ({ files, childrenMap, onFileClick }: TypeSemant
     );
   }, [files]);
   
-  // Get files for selected cell
+  const detailsQuery = useAnalyticsView(
+    selectedCell && !showAllPhotos ? 'type_semantic' : null,
+    selectedCell ? { category: selectedCell.category, file_type: selectedCell.fileType, limit: 300, offset: 0 } : undefined,
+    Boolean(selectedCell && !showAllPhotos)
+  );
+
   const selectedFiles = useMemo(() => {
-    if (showAllPhotos) return allPhotos;
-    if (!selectedCell) return [];
-    const cell = matrixData.find(
-      c => c.category === selectedCell.category && c.fileType === selectedCell.fileType
-    );
-    return cell?.files || [];
-  }, [selectedCell, matrixData, showAllPhotos, allPhotos]);
-  
-  // Get all categories
-  const categories = useMemo(() => {
-    return Object.keys(categorized).filter(name => categorized[name].folders.length > 0);
-  }, [categorized]);
-  
-  // Format folder path
-  const formatFolderPath = (folder: FileItem): string => {
-    const path = getFolderPath(folder.parents[0] || null, files);
-    if (path.length === 0) return 'Root';
-    return '/' + path.map(f => f.name).join('/');
-  };
-  
-  // Get file's folder path
-  const getFileFolderPath = (file: FileItem): string => {
-    if (file.parents.length === 0) return 'Root';
-    const parentFolder = files.find(f => f.id === file.parents[0]);
-    if (!parentFolder) return 'Unknown';
-    return formatFolderPath(parentFolder);
+    if (showAllPhotos) return allPhotos as any[];
+    const d = (detailsQuery.data as any)?.data;
+    return (d?.files || []) as any[];
+  }, [showAllPhotos, allPhotos, detailsQuery.data]);
+
+  const getFileFolderPath = (file: any): string => {
+    return file?.path || 'Root';
   };
   
   // Chart data for selected category
@@ -176,6 +100,22 @@ export const TypeSemanticView = ({ files, childrenMap, onFileClick }: TypeSemant
       };
     }).filter(d => d.count > 0);
   }, [selectedCategory, matrixData]);
+
+  if (typeSemanticQuery.isLoading || typeSemanticQuery.isFetching || semanticQuery.isLoading || semanticQuery.isFetching) {
+    return (
+      <LoadingState
+        operation="Preparing type + semantic analysis"
+        details="Loading cached type×semantic matrix from server..."
+      />
+    );
+  }
+  if (typeSemanticQuery.error || semanticQuery.error) {
+    return (
+      <div className="p-6 text-sm text-red-700">
+        Failed to load cached analytics. Try again in a moment.
+      </div>
+    );
+  }
   
   return (
     <div className="flex flex-col h-full bg-gray-50">
@@ -324,12 +264,12 @@ export const TypeSemanticView = ({ files, childrenMap, onFileClick }: TypeSemant
                                   <td
                                     key={typeCategory.name}
                                     onClick={() => {
-                                      if (cell && cell.files.length > 0) {
+                                      if (cell && cell.fileCount > 0) {
                                         setSelectedCell(isSelected ? null : { category: categoryName, fileType: typeCategory.name });
                                       }
                                     }}
                                     className={`px-4 py-3 text-center border-b border-gray-100 ${
-                                      cell && cell.files.length > 0
+                                      cell && cell.fileCount > 0
                                         ? 'cursor-pointer hover:bg-blue-50'
                                         : ''
                                     } ${isSelected ? 'bg-blue-100 ring-2 ring-blue-500' : ''}`}
@@ -339,7 +279,7 @@ export const TypeSemanticView = ({ files, childrenMap, onFileClick }: TypeSemant
                                         : 'No files'
                                     }
                                   >
-                                    {cell && cell.files.length > 0 ? (
+                                    {cell && cell.fileCount > 0 ? (
                                       <div>
                                         <div className="font-semibold text-sm">{cell.fileCount}</div>
                                         <div className="text-xs text-gray-600">{formatSize(cell.totalSize)}</div>

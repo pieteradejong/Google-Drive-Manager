@@ -1,6 +1,7 @@
 """FastAPI application entry point."""
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from typing import Dict, Any, Optional
 import uuid
 import asyncio
@@ -12,18 +13,24 @@ from .drive_api import list_all_files, build_tree_structure, get_drive_overview,
 from .utils.logger import PerformanceLogger, log_timing, log_operation
 from .models import (
     ScanResponse, HealthResponse, FileItem, DriveStats,
-    QuickScanResponse, ScanProgress, FullScanStatusResponse
+    QuickScanResponse, ScanProgress, FullScanStatusResponse,
+    AnalyticsStatusResponse, AnalyticsViewResponse
 )
 from .cache import (
     load_cache, save_cache, is_cache_valid_time_based,
-    get_cache_metadata, CacheMetadata, validate_cache_with_drive, clear_cache
+    get_cache_metadata, CacheMetadata, validate_cache_with_drive, clear_cache,
+    get_full_scan_analytics_metadata, is_analytics_cache_valid
 )
+from .analytics import save_full_scan_analytics_cache
 
 app = FastAPI(
     title="Google Drive Manager API",
     description="API for scanning and visualizing Google Drive structure",
     version="1.0.0"
 )
+
+# GZip responses (especially analytics payloads)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # Configure CORS for frontend
 app.add_middleware(
@@ -43,6 +50,14 @@ _service = None
 
 # In-memory scan state tracking (use Redis in production)
 _scan_states: Dict[str, Dict[str, Any]] = {}
+
+# In-memory analytics compute state (use Redis in production)
+_analytics_state: Dict[str, Any] = {
+    "status": "missing",  # missing | running | ready | error
+    "started_at": None,
+    "completed_at": None,
+    "error": None,
+}
 
 # Performance logger
 perf_logger = PerformanceLogger("main")
@@ -426,6 +441,12 @@ def run_full_scan(scan_id: str):
             cache_duration_ms=cache_duration_ms,
             scan_id=scan_id
         )
+
+        # Kick off analytics computation in background (best-effort)
+        try:
+            start_analytics_compute_if_needed()
+        except Exception:
+            pass
         
     except OSError as e:
         # Network-related errors
@@ -523,6 +544,11 @@ async def start_full_scan() -> Dict[str, str]:
                     ),
                     "result": result
                 }
+                # If analytics cache is missing/outdated, kick it off in background
+                try:
+                    start_analytics_compute_if_needed()
+                except Exception:
+                    pass
                 return {"scan_id": scan_id}
             else:
                 log_operation("full_scan.cache_miss", logger_name="main", reason="invalid_or_expired")
@@ -616,6 +642,348 @@ async def get_scan_status(scan_id: str) -> FullScanStatusResponse:
         progress=progress,
         result=state.get("result")
     )
+
+
+def _current_full_scan_cache_metadata() -> Optional[CacheMetadata]:
+    # Use sidecar metadata (fast) instead of loading full cache JSON
+    return get_cache_metadata("full_scan")
+
+
+def start_analytics_compute_if_needed() -> bool:
+    """
+    Start analytics computation in a background thread if full_scan cache exists and
+    derived analytics cache is missing/outdated.
+    
+    Returns True if a background job was started.
+    """
+    # If already running, do nothing
+    if _analytics_state.get("status") == "running":
+        return False
+
+    full_meta = _current_full_scan_cache_metadata()
+    if not full_meta:
+        _analytics_state.update({"status": "missing", "error": "full_scan cache missing"})
+        return False
+
+    analytics_meta = get_full_scan_analytics_metadata()
+    if analytics_meta and is_analytics_cache_valid(analytics_meta, full_meta):
+        _analytics_state.update({"status": "ready", "error": None})
+        return False
+
+    def _worker():
+        _analytics_state.update(
+            {
+                "status": "running",
+                "started_at": time.time(),
+                "completed_at": None,
+                "error": None,
+            }
+        )
+        try:
+            cache_data = load_cache("full_scan")
+            if not cache_data:
+                raise RuntimeError("full_scan cache missing")
+            ok = save_full_scan_analytics_cache(cache_data)
+            if not ok:
+                raise RuntimeError("failed to save analytics cache")
+            _analytics_state.update({"status": "ready", "completed_at": time.time(), "error": None})
+        except Exception as e:
+            _analytics_state.update({"status": "error", "completed_at": time.time(), "error": str(e)})
+
+    Thread(target=_worker, daemon=True).start()
+    return True
+
+
+@app.get("/api/analytics/status", response_model=AnalyticsStatusResponse)
+async def analytics_status() -> AnalyticsStatusResponse:
+    full_meta = _current_full_scan_cache_metadata()
+    analytics_meta = get_full_scan_analytics_metadata()
+
+    if not full_meta:
+        return AnalyticsStatusResponse(status="missing", message="Full scan cache not available")
+
+    # If background worker is running, report that first
+    if _analytics_state.get("status") == "running":
+        return AnalyticsStatusResponse(
+            status="running",
+            message="Analytics computation in progress",
+            source_cache_timestamp=full_meta.timestamp,
+            source_cache_version=full_meta.cache_version,
+        )
+
+    if analytics_meta and is_analytics_cache_valid(analytics_meta, full_meta):
+        return AnalyticsStatusResponse(
+            status="ready",
+            message="Analytics cache ready",
+            source_cache_timestamp=analytics_meta.source_cache_timestamp,
+            source_cache_version=analytics_meta.source_cache_version,
+            derived_version=analytics_meta.derived_version,
+            computed_at=analytics_meta.computed_at,
+            timings_ms=analytics_meta.timings_ms,
+        )
+
+    if _analytics_state.get("status") == "error":
+        return AnalyticsStatusResponse(
+            status="error",
+            message="Analytics computation failed",
+            error=_analytics_state.get("error"),
+            source_cache_timestamp=full_meta.timestamp,
+            source_cache_version=full_meta.cache_version,
+        )
+
+    return AnalyticsStatusResponse(
+        status="missing",
+        message="Analytics cache missing or outdated",
+        source_cache_timestamp=full_meta.timestamp,
+        source_cache_version=full_meta.cache_version,
+    )
+
+
+@app.post("/api/analytics/start", response_model=AnalyticsStatusResponse)
+async def analytics_start() -> AnalyticsStatusResponse:
+    # Start compute if needed, but do not block on reading large cache files.
+    start_analytics_compute_if_needed()
+
+    full_meta = _current_full_scan_cache_metadata()
+    if not full_meta:
+        return AnalyticsStatusResponse(status="missing", message="Full scan cache not available")
+
+    # If we just kicked it off (or it's already running), report running quickly.
+    if _analytics_state.get("status") == "running":
+        return AnalyticsStatusResponse(
+            status="running",
+            message="Analytics computation in progress",
+            source_cache_timestamp=full_meta.timestamp,
+            source_cache_version=full_meta.cache_version,
+        )
+
+    # Otherwise fall back to status (fast path should now use sidecar metadata)
+    return await analytics_status()
+
+
+def _etag_for(view: str, meta_source_ts: str, derived_version: int, extra: str = "") -> str:
+    base = f"{derived_version}:{meta_source_ts}:{view}:{extra}"
+    return f'W/"{base}"'
+
+
+def _set_cache_headers(response: Response, *, etag: str, last_modified: str) -> None:
+    response.headers["ETag"] = etag
+    response.headers["Last-Modified"] = last_modified
+    # allow client caching; versioned by ETag/Last-Modified
+    response.headers["Cache-Control"] = "public, max-age=3600"
+
+
+def _build_file_index_from_full_scan() -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    Load full_scan cache and build an id->file dict for quick lookups.
+    Returns (scan_data, file_by_id)
+    """
+    cache_data = load_cache("full_scan")
+    if not cache_data:
+        raise RuntimeError("full_scan cache missing")
+    scan_data = cache_data["data"]
+    files = scan_data.get("files") or []
+    file_by_id = {f.get("id"): f for f in files if f.get("id")}
+    return scan_data, file_by_id
+
+
+def _path_for(file_id: str, file_by_id: Dict[str, Any]) -> str:
+    """
+    Compute a human-readable folder path for a file (follow first parent chain).
+    """
+    names: List[str] = []
+    visited: set[str] = set()
+    current = file_id
+    while current and current not in visited:
+        visited.add(current)
+        f = file_by_id.get(current)
+        if not f:
+            break
+        parents = f.get("parents") or []
+        if not parents:
+            break
+        parent = parents[0]
+        pf = file_by_id.get(parent)
+        if not pf:
+            break
+        names.append(pf.get("name") or "")
+        current = parent
+    # names currently from leaf up; reverse
+    names = [n for n in reversed(names) if n]
+    return "/" + "/".join(names) if names else "Root"
+
+
+@app.get("/api/analytics/view/{view}", response_model=AnalyticsViewResponse)
+async def analytics_view(
+    view: str,
+    response: Response,
+    limit: int = 200,
+    offset: int = 0,
+    category: Optional[str] = None,
+    file_type: Optional[str] = None,
+) -> AnalyticsViewResponse:
+    """
+    Return cached analytics payload for a specific view.
+    Views: duplicates, semantic, depths, orphans, timeline, types, large
+    """
+    full_meta = _current_full_scan_cache_metadata()
+    if not full_meta:
+        raise HTTPException(status_code=400, detail="Full scan cache not available")
+
+    analytics_cache = load_cache("full_scan_analytics")
+    analytics_meta = get_full_scan_analytics_metadata()
+    if not analytics_cache or not analytics_meta or not is_analytics_cache_valid(analytics_meta, full_meta):
+        # Start compute and ask client to poll
+        start_analytics_compute_if_needed()
+        raise HTTPException(status_code=409, detail="Analytics not ready yet. Call /api/analytics/status and retry.")
+
+    data = analytics_cache.get("data") or {}
+    derived_version = int(data.get("derived_version") or analytics_meta.derived_version or 1)
+
+    # Basic routing
+    if view == "duplicates":
+        duplicates = data.get("duplicates") or {}
+        groups = duplicates.get("groups") or []
+        total_groups = len(groups)
+        page = groups[offset : offset + limit]
+
+        scan_data, file_by_id = _build_file_index_from_full_scan()
+
+        # Build minimal file objects and computed paths for returned file ids only
+        file_ids = []
+        for g in page:
+            file_ids.extend(g.get("file_ids") or [])
+        uniq_ids = list(dict.fromkeys([fid for fid in file_ids if fid]))
+
+        files_out = []
+        for fid in uniq_ids:
+            f = file_by_id.get(fid)
+            if not f:
+                continue
+            files_out.append(
+                {
+                    "id": f.get("id"),
+                    "name": f.get("name"),
+                    "mimeType": f.get("mimeType"),
+                    "size": f.get("size"),
+                    "createdTime": f.get("createdTime"),
+                    "modifiedTime": f.get("modifiedTime"),
+                    "webViewLink": f.get("webViewLink"),
+                    "parents": f.get("parents") or [],
+                    "path": _path_for(fid, file_by_id),
+                }
+            )
+
+        payload = {
+            "total_groups": total_groups,
+            "offset": offset,
+            "limit": limit,
+            "total_potential_savings": duplicates.get("total_potential_savings") or 0,
+            "groups": page,
+            "files": files_out,
+        }
+        etag = _etag_for(view, analytics_meta.source_cache_timestamp, derived_version, f"{offset}:{limit}")
+        _set_cache_headers(response, etag=etag, last_modified=analytics_meta.computed_at)
+        return AnalyticsViewResponse(
+            view=view,
+            source_cache_timestamp=analytics_meta.source_cache_timestamp,
+            derived_version=derived_version,
+            computed_at=analytics_meta.computed_at,
+            data=payload,
+        )
+
+    if view == "type_semantic" and category and file_type:
+        # Provide file list details for a specific category×type cell to avoid client-side scans
+        semantic_map = (data.get("semantic") or {}).get("folder_category") or {}
+
+        def _file_type_group(mime: str) -> str:
+            m = (mime or "").lower()
+            if m.startswith("image/"):
+                return "Images"
+            if m.startswith("video/"):
+                return "Videos"
+            if m.startswith("audio/"):
+                return "Audio"
+            if (
+                m.startswith("application/pdf")
+                or m.startswith("application/vnd.google-apps.document")
+                or m.startswith("application/msword")
+                or m.startswith("application/vnd.openxmlformats")
+            ):
+                return "Documents"
+            return "Other"
+
+        scan_data, file_by_id = _build_file_index_from_full_scan()
+        files_all = scan_data.get("files") or []
+        matched: List[Dict[str, Any]] = []
+        for f in files_all:
+            if f.get("mimeType") == "application/vnd.google-apps.folder":
+                continue
+            parents = f.get("parents") or []
+            parent = parents[0] if parents else None
+            cat = "Uncategorized"
+            if parent and parent in semantic_map:
+                cat = semantic_map[parent].get("category") or "Uncategorized"
+            if cat != category:
+                continue
+            if _file_type_group(f.get("mimeType") or "") != file_type:
+                continue
+            matched.append(f)
+
+        total_count = len(matched)
+        # Sort by size desc
+        matched.sort(key=lambda x: int(x.get("size") or 0), reverse=True)
+        page = matched[offset : offset + limit]
+        files_out = []
+        for f in page:
+            fid = f.get("id")
+            if not fid:
+                continue
+            files_out.append(
+                {
+                    "id": f.get("id"),
+                    "name": f.get("name"),
+                    "mimeType": f.get("mimeType"),
+                    "size": f.get("size"),
+                    "createdTime": f.get("createdTime"),
+                    "modifiedTime": f.get("modifiedTime"),
+                    "webViewLink": f.get("webViewLink"),
+                    "parents": f.get("parents") or [],
+                    "path": _path_for(fid, file_by_id),
+                }
+            )
+
+        payload = {
+            "category": category,
+            "file_type": file_type,
+            "total_count": total_count,
+            "offset": offset,
+            "limit": limit,
+            "files": files_out,
+        }
+        etag = _etag_for(view, analytics_meta.source_cache_timestamp, derived_version, f"{category}:{file_type}:{offset}:{limit}")
+        _set_cache_headers(response, etag=etag, last_modified=analytics_meta.computed_at)
+        return AnalyticsViewResponse(
+            view=view,
+            source_cache_timestamp=analytics_meta.source_cache_timestamp,
+            derived_version=derived_version,
+            computed_at=analytics_meta.computed_at,
+            data=payload,
+        )
+
+    if view in ("semantic", "depths", "orphans", "timeline", "types", "large", "age_semantic", "type_semantic"):
+        payload = data.get(view) or {}
+        etag = _etag_for(view, analytics_meta.source_cache_timestamp, derived_version)
+        _set_cache_headers(response, etag=etag, last_modified=analytics_meta.computed_at)
+        return AnalyticsViewResponse(
+            view=view,
+            source_cache_timestamp=analytics_meta.source_cache_timestamp,
+            derived_version=derived_version,
+            computed_at=analytics_meta.computed_at,
+            data=payload,
+        )
+
+    raise HTTPException(status_code=404, detail=f"Unknown analytics view '{view}'")
 
 
 @app.on_event("startup")

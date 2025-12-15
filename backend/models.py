@@ -89,3 +89,24 @@ class FullScanStatusResponse(BaseModel):
     progress: ScanProgress
     result: Optional[ScanResponse] = None  # Only present when complete
 
+
+class AnalyticsStatusResponse(BaseModel):
+    """Status for derived analytics computation/cache."""
+    status: str  # "missing", "running", "ready", "error"
+    message: Optional[str] = None
+    source_cache_timestamp: Optional[str] = None
+    source_cache_version: Optional[int] = None
+    derived_version: Optional[int] = None
+    computed_at: Optional[str] = None
+    timings_ms: Optional[Dict[str, float]] = None
+    error: Optional[str] = None
+
+
+class AnalyticsViewResponse(BaseModel):
+    """Response model for per-view analytics payload."""
+    view: str
+    source_cache_timestamp: str
+    derived_version: int
+    computed_at: str
+    data: Dict[str, Any]
+

@@ -24,6 +24,7 @@ export function getCurrentFolderContents(
   files: FileItem[],
   childrenMap: Record<string, string[]>
 ): FileItem[] {
+  const fileById = new Map(files.map(f => [f.id, f]));
   if (folderId === null) {
     // Root folder: files with no parents
     return files.filter((f) => f.parents.length === 0);
@@ -31,7 +32,8 @@ export function getCurrentFolderContents(
   
   // Get children of this folder
   const childIds = childrenMap[folderId] || [];
-  return files.filter((f) => childIds.includes(f.id));
+  // Avoid O(n*m) includes scans: map ids -> files
+  return childIds.map((id) => fileById.get(id)).filter((f): f is FileItem => f !== undefined);
 }
 
 /**
@@ -93,12 +95,10 @@ export function buildFolderTree(
   files: FileItem[],
   childrenMap: Record<string, string[]>
 ): FolderTreeNode[] {
-  const folders = files.filter(
-    (f) => f.mimeType === 'application/vnd.google-apps.folder'
-  );
+  const fileById = new Map(files.map((f) => [f.id, f]));
+  const folders = files.filter((f) => f.mimeType === 'application/vnd.google-apps.folder');
   
   const MAX_DEPTH = 20; // Reasonable limit for folder depth
-  const visited = new Set<string>(); // Track visited to prevent cycles
   
   const buildNode = (folderId: string, depth: number = 0, path: Set<string> = new Set()): FolderTreeNode | null => {
     // Prevent infinite loops from circular references
@@ -112,7 +112,7 @@ export function buildFolderTree(
       return null;
     }
     
-    const folder = files.find((f) => f.id === folderId);
+    const folder = fileById.get(folderId);
     if (!folder) return null;
     
     const newPath = new Set(path);
@@ -120,7 +120,7 @@ export function buildFolderTree(
     
     const childIds = childrenMap[folderId] || [];
     const childFolders = childIds
-      .map((id) => files.find((f) => f.id === id))
+      .map((id) => fileById.get(id))
       .filter((f): f is FileItem => f !== undefined && f.mimeType === 'application/vnd.google-apps.folder');
     
     return {
@@ -134,7 +134,11 @@ export function buildFolderTree(
   };
   
   // Start with root folders
-  const rootFolders = folders.filter((f) => f.parents.length === 0);
+  const rootFolders = folders.filter((f) => {
+    if (!f.parents || f.parents.length === 0) return true;
+    // If parent isn't present in this dataset, treat as root (shared/partial graphs)
+    return !f.parents.some((p) => fileById.has(p));
+  });
   return rootFolders
     .slice(0, 100) // Limit to first 100 root folders to prevent overload
     .map((f) => buildNode(f.id))

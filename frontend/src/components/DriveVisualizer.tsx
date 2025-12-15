@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import { Loader2, RefreshCw, LayoutGrid, List, AlertCircle, Zap, Database, Clock, ThumbsUp, ThumbsDown, BookOpen } from 'lucide-react';
 import { useQuickScan } from '../hooks/useQuickScan';
 import { useFullScan } from '../hooks/useFullScan';
+import { useEnsureAnalyticsStarted } from '../hooks/useAnalytics';
 import { PerformanceIndicator } from './PerformanceIndicator';
 import { VisualizationsDocumentation } from './VisualizationsDocumentation';
 import { useVisualizationStore } from '../stores/visualizationStore';
@@ -35,6 +36,7 @@ const FolderTreeView = lazy(() => import('./experiments/FolderTreeView').then(m 
 const SemanticAnalysisView = lazy(() => import('./experiments/SemanticAnalysisView').then(m => ({ default: m.SemanticAnalysisView })));
 const AgeSemanticView = lazy(() => import('./experiments/AgeSemanticView').then(m => ({ default: m.AgeSemanticView })));
 const TypeSemanticView = lazy(() => import('./experiments/TypeSemanticView').then(m => ({ default: m.TypeSemanticView })));
+const DagView = lazy(() => import('./experiments/DagView').then(m => ({ default: m.DagView })));
 
 const formatSize = (bytes: number | string | undefined): string => {
   if (!bytes) return '0 B';
@@ -102,6 +104,9 @@ export const DriveVisualizer = () => {
   
   const [displayData, setDisplayData] = useState<ScanResponse | null>(null);
   const [showDocumentation, setShowDocumentation] = useState(false);
+
+  // Kick off backend derived analytics computation once full scan data is available
+  useEnsureAnalyticsStarted(Boolean(fullResult));
   
   // Try to load cached full scan on mount
   useEffect(() => {
@@ -219,6 +224,8 @@ export const DriveVisualizer = () => {
             return 'Finding duplicate files...';
           case 'storage-dashboard':
             return 'Building storage dashboard...';
+          case 'dag':
+            return 'Building DAG...';
           default:
             return 'Loading visualization...';
         }
@@ -308,6 +315,9 @@ export const DriveVisualizer = () => {
         break;
       case 'type-semantic':
         ExperimentComponent = TypeSemanticView;
+        break;
+      case 'dag':
+        ExperimentComponent = DagView;
         break;
       case 'list':
         return <ListView {...commonProps} />;
@@ -621,6 +631,7 @@ export const DriveVisualizer = () => {
                   <option value="type-grouped">Type Grouped</option>
                   <option value="search-first">Search First</option>
                   <option value="folder-tree">Folder Tree</option>
+                  <option value="dag">DAG View</option>
                   <option value="list">List</option>
                 </optgroup>
               </select>

@@ -2,15 +2,12 @@
 import { useMemo, useState } from 'react';
 import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Folder, Search, Filter } from 'lucide-react';
-import { formatSize, getFolderPath } from '../../utils/navigation';
+import { formatSize } from '../../utils/navigation';
 import {
-  groupFoldersBySemantic,
-  calculateSemanticStats,
   getCategoryByName,
-  type SemanticCategory
 } from '../../utils/semanticAnalysis';
-import { measureSync } from '../../utils/performance';
 import { LoadingState } from '../LoadingState';
+import { useAnalyticsView } from '../../hooks/useAnalytics';
 import type { FileItem } from '../../types/drive';
 
 interface SemanticAnalysisViewProps {
@@ -22,73 +19,121 @@ interface SemanticAnalysisViewProps {
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16', '#6366f1', '#14b8a6'];
 
 export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: SemanticAnalysisViewProps) => {
+  void childrenMap; // semantic analytics are computed server-side
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [minSizeMB, setMinSizeMB] = useState<number>(0);
-  const [isAnalyzing, setIsAnalyzing] = useState(true);
-  const [analysisProgress, setAnalysisProgress] = useState(0);
   
   // Get all folders
   const folders = useMemo(() => {
     return files.filter(f => f.mimeType === 'application/vnd.google-apps.folder');
   }, [files]);
-  
-  // Group folders by semantic category with progress tracking
-  const { categorized, uncategorized } = useMemo(() => {
-    setIsAnalyzing(true);
-    setAnalysisProgress(0);
-    
-    // Simulate progress for user feedback
-    const progressInterval = setInterval(() => {
-      setAnalysisProgress(prev => Math.min(prev + 10, 90));
-    }, 100);
-    
-    const result = measureSync('SemanticAnalysisView: groupFoldersBySemantic', () => {
-      return groupFoldersBySemantic(folders, files, childrenMap);
-    }, 500);
-    
-    clearInterval(progressInterval);
-    setAnalysisProgress(100);
-    
-    // Small delay to show completion
-    setTimeout(() => {
-      setIsAnalyzing(false);
-    }, 200);
-    
-    return result;
-  }, [folders, files, childrenMap]);
-  
-  // Show loading state during analysis
-  if (isAnalyzing) {
+
+  const analyticsQuery = useAnalyticsView('semantic', undefined, true);
+  const analytics = (analyticsQuery.data as any)?.data;
+  const folderCategory: Record<string, { category: string; confidence?: string; method?: string }> = analytics?.folder_category || {};
+  const categoryFolderIds: Record<string, string[]> = analytics?.category_folder_ids || {};
+  const uncategorizedFolderIds: string[] = analytics?.uncategorized_folder_ids || [];
+  const totals: Record<string, { folder_count: number; total_size: number }> = analytics?.totals || {};
+
+  const fileById = useMemo(() => {
+    const map = new Map<string, FileItem>();
+    files.forEach(f => map.set(f.id, f));
+    return map;
+  }, [files]);
+
+  const pathCache = useMemo(() => {
+    const cache = new Map<string, string>();
+    const getPath = (folderId: string): string => {
+      if (cache.has(folderId)) return cache.get(folderId)!;
+      const parts: string[] = [];
+      const visited = new Set<string>();
+      let current: string | null = folderId;
+      while (current && !visited.has(current)) {
+        visited.add(current);
+        const folder = fileById.get(current);
+        if (!folder) break;
+        const parent = folder.parents?.length ? folder.parents[0] : null;
+        if (!parent) break;
+        const parentFolder = fileById.get(parent);
+        if (!parentFolder) break;
+        parts.push(parentFolder.name);
+        current = parent;
+      }
+      const out = parts.length ? '/' + parts.reverse().join('/') : 'Root';
+      cache.set(folderId, out);
+      return out;
+    };
+    // expose getter via closure
+    (cache as any).__getPath = getPath;
+    return cache;
+  }, [fileById]);
+
+  const getPathString = (folderId: string): string => {
+    return (pathCache as any).__getPath(folderId);
+  };
+
+  if (analyticsQuery.isLoading || analyticsQuery.isFetching) {
     return (
       <LoadingState
-        operation="Analyzing folder semantics"
-        details={`Categorizing ${folders.length} folders...`}
-        progress={analysisProgress}
+        operation="Preparing semantic analysis"
+        details="Loading cached semantic categories from server..."
       />
     );
   }
+  if (analyticsQuery.error) {
+    return (
+      <div className="p-6 text-sm text-red-700">
+        Failed to load semantic analytics. Try again in a moment.
+      </div>
+    );
+  }
   
-  // Calculate total size for percentage calculations
-  const totalDriveSize = useMemo(() => {
-    return folders.reduce((sum, f) => sum + (f.calculatedSize || f.size || 0), 0);
-  }, [folders]);
-  
-  // Calculate statistics
+  const uncategorizedTotalSize = useMemo(() => {
+    return uncategorizedFolderIds.reduce((sum, id) => {
+      const f = fileById.get(id);
+      return sum + (f?.calculatedSize || f?.size || 0);
+    }, 0);
+  }, [uncategorizedFolderIds, fileById]);
+
   const stats = useMemo(() => {
-    return calculateSemanticStats(categorized, totalDriveSize);
-  }, [categorized, totalDriveSize]);
+    const totalSize = Object.values(totals).reduce((sum, t) => sum + (t.total_size || 0), 0) + uncategorizedTotalSize;
+    const entries = Object.entries(totals).map(([name, t]) => {
+      const percentage = totalSize > 0 ? ((t.total_size || 0) / totalSize) * 100 : 0;
+      return {
+        name,
+        folderCount: t.folder_count || 0,
+        totalSize: t.total_size || 0,
+        percentage,
+        color: getCategoryByName(name)?.color || '#6b7280'
+      };
+    });
+    if (uncategorizedFolderIds.length > 0) {
+      const percentage = totalSize > 0 ? (uncategorizedTotalSize / totalSize) * 100 : 0;
+      entries.push({
+        name: 'Uncategorized',
+        folderCount: uncategorizedFolderIds.length,
+        totalSize: uncategorizedTotalSize,
+        percentage,
+        color: '#6b7280'
+      });
+    }
+    return entries
+      .filter(e => e.folderCount > 0)
+      .sort((a, b) => b.totalSize - a.totalSize);
+  }, [totals, uncategorizedFolderIds.length, uncategorizedTotalSize]);
   
   // Get folders for selected category
   const selectedFolders = useMemo(() => {
     if (!selectedCategory) return [];
     
     if (selectedCategory === 'Uncategorized') {
-      return uncategorized;
+      return uncategorizedFolderIds.map(id => fileById.get(id)).filter((f): f is FileItem => Boolean(f));
     }
-    
-    return categorized[selectedCategory]?.folders || [];
-  }, [selectedCategory, categorized, uncategorized]);
+
+    const ids = categoryFolderIds[selectedCategory] || [];
+    return ids.map(id => fileById.get(id)).filter((f): f is FileItem => Boolean(f));
+  }, [selectedCategory, categoryFolderIds, uncategorizedFolderIds, fileById]);
   
   // Filter selected folders by search and size
   const filteredFolders = useMemo(() => {
@@ -120,19 +165,15 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
     if (selectedCategory === 'Uncategorized') {
       return { confidence: 'low', method: 'none' };
     }
-    
-    const categoryData = categorized[selectedCategory || ''];
-    if (!categoryData) return { confidence: 'low', method: 'none' };
-    
-    const classification = categoryData.classifications.find(c => c.folder.id === folder.id);
-    return classification || { confidence: 'low', method: 'unknown' };
+
+    const info = folderCategory[folder.id];
+    if (!info) return { confidence: 'low', method: 'unknown' };
+    return { confidence: info.confidence || 'low', method: info.method || 'unknown' };
   };
   
   // Format folder path
   const formatFolderPath = (folder: FileItem): string => {
-    const path = getFolderPath(folder.parents[0] || null, files);
-    if (path.length === 0) return 'Root';
-    return '/' + path.map(f => f.name).join('/');
+    return getPathString(folder.id);
   };
   
   // Chart data for pie chart
@@ -170,8 +211,8 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
             <div className="text-xs text-gray-600 mb-1">Total Folders</div>
             <div className="text-2xl font-bold text-gray-900">{folders.length}</div>
             <div className="text-xs text-gray-500 mt-1">
-              {Object.values(categorized).reduce((sum, cat) => sum + cat.folders.length, 0)} categorized,
-              {' '}{uncategorized.length} uncategorized
+              {stats.filter(s => s.name !== 'Uncategorized').reduce((sum, s) => sum + s.folderCount, 0)} categorized,
+              {' '}{uncategorizedFolderIds.length} uncategorized
             </div>
           </div>
           
@@ -207,7 +248,7 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
           })}
           
           {/* Uncategorized */}
-          {uncategorized.length > 0 && (
+          {uncategorizedFolderIds.length > 0 && (
             <button
               onClick={() => setSelectedCategory(selectedCategory === 'Uncategorized' ? null : 'Uncategorized')}
               className={`w-full flex items-center justify-between p-3 rounded-lg mb-2 transition-colors ${
@@ -221,7 +262,7 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium truncate">Uncategorized</div>
                   <div className="text-xs text-gray-500">
-                    {uncategorized.length} folders
+                    {uncategorizedFolderIds.length} folders
                   </div>
                 </div>
               </div>

@@ -77,6 +77,8 @@ export const SidebarTreeView = ({ files, childrenMap, onFileClick }: SidebarTree
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   
+  const fileById = useMemo(() => new Map(files.map((f) => [f.id, f])), [files]);
+
   // Memoize expensive computations
   const folderTree = useMemo(() => buildFolderTree(files, childrenMap), [files, childrenMap]);
   const selectedContents = useMemo(
@@ -134,7 +136,7 @@ export const SidebarTreeView = ({ files, childrenMap, onFileClick }: SidebarTree
         ) : (
           <div>
             <h2 className="text-lg font-semibold mb-4">
-              {files.find(f => f.id === selectedFolderId)?.name || 'Folder'}
+              {fileById.get(selectedFolderId || '')?.name || 'Folder'}
             </h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               {/* Folders */}
