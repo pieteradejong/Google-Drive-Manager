@@ -64,6 +64,13 @@ This section documents key architectural and design decisions made during develo
 - **Placeholder for Quick Scan**: After quick scan, shows informative placeholder instead of empty visualizations
 - **Clear Expectations**: Button descriptions explain what each scan provides and expected duration
 - **Visual Feedback**: Progress bars, loading states, and status indicators throughout
+- **Performance Transparency**: Timing information shown for all operations (elapsed time, estimated remaining, slow warnings)
+- **Folder Understanding**: Content analysis shows what's inside folders without needing to navigate:
+  - Purpose badges (Code Project, Node.js Dependencies, Photo Collection, etc.)
+  - File type breakdowns (images, videos, code, documents)
+  - Content summaries showing file counts and types
+  - Expandable details for deep analysis
+- **Reduced Refresh Clutter**: Consolidated refresh options, only shown when data is >10 minutes old
 - **Error Handling**: Descriptive error messages with setup instructions when credentials are missing
 
 ### Caching Strategy
@@ -71,11 +78,13 @@ This section documents key architectural and design decisions made during develo
 - **Hybrid Approach**: 
   - Server-side caching for expensive full scans (file-based JSON)
   - Client-side caching via TanStack Query for quick scans
-- **Smart Invalidation**: Uses Drive API's recently modified files check to detect changes
-- **TTL Strategy**: 
-  - Quick scan: 1 hour (time-based)
-  - Full scan: 7 days OR until Drive changes detected
-- **See [CACHING_STRATEGY.md](CACHING_STRATEGY.md) for detailed implementation plan**
+- **Optimized for Rarely-Changing Drives**:
+  - **Extended TTLs**: Quick scan (7 days), Full scan (30 days initial TTL)
+  - **Smart Invalidation**: After TTL expires, checks Drive API to see if files actually changed
+  - **Persistent Cache**: If no files changed, cache remains valid indefinitely until files change
+  - **Efficient Checks**: Only 1 API call needed to detect changes (pageSize=1, minimal fields)
+- **Result**: For drives with few changes (~12 files/week), may only need 1 scan per month instead of multiple per week
+- **See [CACHING_STRATEGY.md](CACHING_STRATEGY.md) and [OPTIMIZED_CACHING.md](OPTIMIZED_CACHING.md) for detailed implementation**
 
 ### Data Models
 
@@ -96,15 +105,21 @@ This section documents key architectural and design decisions made during develo
 
 ### Frontend Architecture
 
-- **React Hooks**: Custom hooks (`useQuickScan`, `useFullScan`) encapsulate API logic
+- **React Hooks**: Custom hooks (`useQuickScan`, `useFullScan`) encapsulate API logic with timing tracking
 - **State Management**: 
   - Zustand for UI state (view mode)
   - React state for component-specific data
-  - TanStack Query for server state (planned)
+  - TanStack Query for server state with client-side caching
 - **Component Structure**: 
   - `DriveVisualizer`: Main container component
   - `ListView`: Hierarchical list view
+  - `LoadingState`: Reusable loading component with operation names and progress
+  - `PerformanceIndicator`: Shows timing information for operations
   - Multiple experiment views: Folder Depth, Duplicate Finder, Orphaned Files, and more
+- **Performance Monitoring**:
+  - Performance API for timing expensive calculations
+  - Axios interceptors for API call timing
+  - Automatic logging of slow operations to console
 - **Type Safety**: Full TypeScript coverage with strict type checking
 
 ### Testing Strategy
@@ -143,7 +158,18 @@ This section documents key architectural and design decisions made during develo
 - **Pagination**: Drive API calls use `pageSize=1000` for efficiency
 - **Background Processing**: Long-running scans don't block API
 - **Progressive Loading**: Quick scan provides immediate results
-- **Caching**: Reduces API calls and improves response times (planned)
+- **Caching**: Reduces API calls and improves response times (optimized for rarely-changing drives)
+- **Performance Monitoring**:
+  - **Backend**: Structured logging with timing for all operations
+  - **Frontend**: Performance API tracking for expensive calculations
+  - **Automatic Timing**: All API calls, data processing, and rendering tracked
+  - **Thresholds**: Warnings for slow operations (>1s backend, >500ms frontend)
+  - **Middleware**: Automatic request timing with X-Response-Time headers
+- **UI Responsiveness**:
+  - **Loading States**: Clear indicators showing what operation is running
+  - **Progress Tracking**: Progress bars for long-running operations
+  - **Operation Names**: Users see "Analyzing folder semantics" instead of blank screen
+  - **Prevents Freeze**: Loading states prevent UI appearing frozen during 20+ second operations
 
 ### Security
 
@@ -179,6 +205,8 @@ Google-Drive-Manager/
 - [CREDENTIALS_SETUP.md](CREDENTIALS_SETUP.md) - OAuth credentials guide
 - [PROJECT_PLAN.md](PROJECT_PLAN.md) - Project roadmap and phases
 - [CACHING_STRATEGY.md](CACHING_STRATEGY.md) - Caching implementation plan
+- [OPTIMIZED_CACHING.md](OPTIMIZED_CACHING.md) - Optimized caching for rarely-changing drives
+- [LEARNINGS.md](LEARNINGS.md) - Key learnings and best practices
 
 ## License
 

@@ -197,18 +197,25 @@ try {
 
 **Implementation**:
 - **Quick Scan**: 
-  - Server-side: 1 hour TTL (time-based only)
+  - Server-side: 7 days TTL + smart validation (optimized for rarely-changing drives)
   - Client-side: 5 minutes staleTime, 1 hour cacheTime
 - **Full Scan**:
-  - Server-side: 7 days TTL + smart validation (Drive API change detection)
+  - Server-side: 30 days TTL + smart validation (Drive API change detection)
   - Client-side: 30 minutes cacheTime
 
 **Smart Cache Invalidation**:
 - If cache is past TTL, check Drive API for recently modified files
-- If no files modified: cache is still valid (even if past TTL)
+- If no files modified: cache is still valid (even if past TTL) - can persist indefinitely
 - If files modified: cache is invalidated
+- Only 1 API call needed to check for changes (pageSize=1, minimal fields)
 
-**Key Takeaway**: Smart invalidation reduces unnecessary full scans while ensuring data freshness.
+**Optimization for Rarely-Changing Drives**:
+- **Extended TTLs**: 7 days (quick), 30 days (full) as initial check
+- **Persistent Cache**: Cache remains valid indefinitely until files actually change
+- **Minimal API Usage**: For drives with ~12 files changing per week, may only need 1 scan per month
+- **Efficiency**: One API call to detect changes vs. full scan of thousands of files
+
+**Key Takeaway**: Smart invalidation based on actual changes (not time alone) dramatically reduces unnecessary scans and API usage for rarely-changing drives.
 
 ### Cache File Management
 
@@ -219,6 +226,19 @@ try {
 - Atomic writes (write to temp file, then rename)
 - Automatic cleanup of corrupted cache files
 - Manual invalidation via API endpoint
+- Cache can persist for weeks/months if Drive unchanged
+
+### Performance Impact
+
+**Before Optimization**:
+- Quick scan: ~168 scans per week (every hour)
+- Full scan: 1 scan per week
+- Many unnecessary API calls
+
+**After Optimization** (for rarely-changing drives):
+- Quick scan: 0-1 scans per week (only when files change)
+- Full scan: ~1 scan per month (only when files change)
+- Minimal API usage - only checks for changes, doesn't rescan
 
 ---
 
@@ -472,14 +492,134 @@ svg.selectAll('path')
 
 ---
 
+## Performance Monitoring & Logging
+
+### Structured Logging
+
+**Learning**: Print statements are insufficient for production debugging. Need structured logging with timing.
+
+**Implementation**:
+- **Backend**: Custom logger with timing decorators and context managers
+- **Structured Format**: `[timestamp] [level] [module] [operation] duration=Xms files=Y`
+- **Automatic Thresholds**: Warnings for >1s, errors for >5s operations
+- **Performance Metadata**: Automatically extracts useful context (file counts, sizes)
+
+**Pattern**:
+```python
+@timed_operation("build_tree_structure")
+def build_tree_structure(files):
+    # Function automatically timed and logged
+    pass
+
+with log_timing("operation_name", files=1000):
+    # Block automatically timed
+    pass
+```
+
+**Key Takeaway**: Structured logging with timing helps identify bottlenecks and track performance regressions.
+
+### Frontend Performance Tracking
+
+**Learning**: UI freezes during 20+ second operations create terrible UX. Users need to see what's happening.
+
+**Implementation**:
+- **Performance API**: Use `performance.now()` and `performance.mark()` for timing
+- **Axios Interceptors**: Automatic timing of all API calls
+- **Expensive Operation Tracking**: Wrap heavy calculations with timing utilities
+- **Console Logging**: Automatic warnings for slow operations (>500ms)
+
+**Pattern**:
+```typescript
+measureAsync('semanticAnalysis', async () => {
+  // Operation automatically timed and logged
+  return await heavyComputation();
+}, 1000); // Warn threshold
+```
+
+**Key Takeaway**: Track expensive operations to identify performance issues before users complain.
+
+### Loading States & Progress Indicators
+
+**Learning**: Blank frozen screens during heavy operations create terrible UX. Users need feedback.
+
+**Implementation**:
+- **LoadingState Component**: Shows operation name, details, and progress bar
+- **Operation-Specific Messages**: "Analyzing folder semantics" instead of generic "Loading..."
+- **Progress Tracking**: Estimated remaining time for long operations
+- **Visual Feedback**: Animated spinners, progress bars, completion indicators
+
+**Key Takeaway**: Loading states prevent perceived freeze. Users are patient if they know what's happening.
+
+**Example**:
+```typescript
+if (isAnalyzing) {
+  return (
+    <LoadingState
+      operation="Analyzing folder semantics"
+      details={`Categorizing ${folders.length} folders...`}
+      progress={analysisProgress}
+    />
+  );
+}
+```
+
+## User Understanding & Context
+
+### Folder Content Analysis
+
+**Learning**: Users don't understand what's in folders just from paths. Need content summaries.
+
+**Problem**: Users see paths like `grux/node_modules/biz/resolver/test/resolve/node_modules/...` and have no idea what's inside.
+
+**Solution**:
+- **Purpose Detection**: Analyze folder contents to determine purpose (Code Project, Node.js Dependencies, Photo Collection, etc.)
+- **File Type Breakdown**: Show counts of images, videos, code files, documents
+- **Content Summaries**: "15 files, 3 folders (5 images, 10 code files)"
+- **Expandable Details**: Click to see detailed breakdown
+
+**Implementation**:
+- `FolderContentAnalyzer` utility analyzes folder contents
+- Purpose detection based on file types, folder names, content patterns
+- Semantic categorization (Backup, Photos, Code Project, etc.)
+- File type grouping (images, videos, documents, code, archives)
+
+**Key Takeaway**: Help users understand their Drive structure without needing to navigate into every folder.
+
+### Path Truncation for Deep Hierarchies
+
+**Learning**: Very long paths (20+ levels) are unreadable and confusing.
+
+**Solution**: Show only last 3 path segments with "..." prefix for very long paths.
+
+**Example**:
+- Before: `grux / node_modules / biz / resolver / test / resolve / node_modules / rfile / node_modules / umd / node_modules / browserify / node_modules`
+- After: `... / rfile / node_modules / umd`
+
+**Key Takeaway**: Prioritize showing meaningful information over complete paths.
+
+### UI Information Density
+
+**Learning**: Too many refresh buttons and status indicators create clutter without adding value.
+
+**Solution**:
+- Consolidate refresh options into single location
+- Only show refresh if data is >10 minutes old
+- Show timing information instead of just "updated X ago"
+- Remove redundant status indicators
+
+**Key Takeaway**: Less is more. Show what users need to know, not everything possible.
+
 ## Conclusion
 
 The key learnings from this project emphasize:
 
 1. **Safety First**: Always add cycle detection and limits to recursive functions
-2. **Performance Matters**: Memoize expensive operations, limit DOM elements
-3. **User Experience**: Handle errors gracefully, show helpful messages
+2. **Performance Matters**: Memoize expensive operations, limit DOM elements, track performance
+3. **User Experience**: Handle errors gracefully, show helpful messages, prevent perceived freezes
 4. **Code Quality**: Use tree-shaking, lazy loading, and proper cleanup
 5. **Scalability**: Design for large datasets from the start
+6. **Transparency**: Show users what's happening, not just that something is loading
+7. **Context Matters**: Help users understand their data structure, not just display raw paths
+8. **Smart Caching**: Optimize for actual usage patterns (rarely-changing drives) not theoretical worst cases
 
 These patterns and practices ensure the application remains performant, stable, and maintainable as it scales.
