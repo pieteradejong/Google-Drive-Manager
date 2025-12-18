@@ -114,7 +114,8 @@ export const DriveVisualizer = () => {
         // Ignore errors - just means no cache available
       });
     }
-  }, []); // Only run on mount
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Only run on mount - intentionally ignoring deps
 
   // Update display data when we have results (including cached data on load)
   useEffect(() => {

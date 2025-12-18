@@ -30,8 +30,15 @@ export const DuplicateFinderView = ({ files, childrenMap, onFileClick }: Duplica
   const [minFileSizeMB, setMinFileSizeMB] = useState<number>(0);
   const analyticsQuery = useAnalyticsView('duplicates', { limit: 1000, offset: 0 }, true);
   const analytics = (analyticsQuery.data as any)?.data;
-  const serverGroups: DuplicateGroup[] = (analytics?.groups || []) as any;
-  const serverFiles: Array<FileItem & { path?: string }> = (analytics?.files || []) as any;
+  
+  // Memoize to avoid creating new arrays on every render
+  const serverGroups = useMemo(() => {
+    return (analytics?.groups || []) as DuplicateGroup[];
+  }, [analytics?.groups]);
+  
+  const serverFiles = useMemo(() => {
+    return (analytics?.files || []) as Array<FileItem & { path?: string }>;
+  }, [analytics?.files]);
 
   const fileById = useMemo(() => {
     const map = new Map<string, any>();

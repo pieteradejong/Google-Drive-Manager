@@ -78,7 +78,13 @@ export const PathExplorerTab = ({ dag, selectedNodeId, setSelectedNodeId, select
   const fallback = selectedNodeId || selectedRootIds[0] || dag.roots[0] || '';
   const targetId = dag.nodesById.has(fallback) ? fallback : '';
 
-  const roots = selectedRootIds.length > 0 ? selectedRootIds : dag.roots.slice(0, 20);
+  // Memoize roots to avoid recalculating on every render
+  const roots = useMemo(() => {
+    return selectedRootIds.length > 0 ? selectedRootIds : dag.roots.slice(0, 20);
+  }, [selectedRootIds, dag.roots]);
+  
+  // Create a stable key for the roots array
+  const rootsKey = useMemo(() => roots.join('|'), [roots]);
 
   const { paths, truncated } = useMemo(() => {
     if (!targetId) return { paths: [] as PathResult[], truncated: false };
@@ -86,7 +92,8 @@ export const PathExplorerTab = ({ dag, selectedNodeId, setSelectedNodeId, select
     const { dist, truncated: distTrunc } = computeDistancesToTarget(dag, targetId, Math.max(filters.maxNodes, 5_000));
     const paths = reconstructSomePaths(dag, roots, targetId, dist, filters.maxPaths, Math.max(20, filters.maxDepth * 3));
     return { paths, truncated: distTrunc };
-  }, [dag, targetId, roots.join('|'), filters.maxNodes, filters.maxPaths, filters.maxDepth]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dag, targetId, rootsKey, filters.maxNodes, filters.maxPaths, filters.maxDepth]);
 
   if (!targetId) {
     return <div className="text-center text-gray-500 py-12">Select a node to explore paths</div>;

@@ -3,7 +3,13 @@ import type { DagTabProps } from './types';
 import { reachableFromRoots, getMultiParentIds } from '../../../utils/driveDag';
 
 export const OrphansTab = ({ dag, selectedRootIds, setSelectedNodeId, filters }: DagTabProps) => {
-  const roots = selectedRootIds.length > 0 ? selectedRootIds : dag.roots.slice(0, 20);
+  // Memoize roots to avoid recalculating on every render
+  const roots = useMemo(() => {
+    return selectedRootIds.length > 0 ? selectedRootIds : dag.roots.slice(0, 20);
+  }, [selectedRootIds, dag.roots]);
+  
+  // Create a stable key for the roots array
+  const rootsKey = useMemo(() => roots.join('|'), [roots]);
 
   const { orphans, truncated } = useMemo(() => {
     const reach = reachableFromRoots(dag, roots, { maxNodes: filters.maxNodes, maxHops: filters.maxDepth });
@@ -33,7 +39,8 @@ export const OrphansTab = ({ dag, selectedRootIds, setSelectedNodeId, filters }:
     });
 
     return { orphans, truncated: reach.truncated };
-  }, [dag, roots.join('|'), filters.maxNodes, filters.maxDepth, filters.foldersOnly, filters.minSizeBytes]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dag, rootsKey, filters.maxNodes, filters.maxDepth, filters.foldersOnly, filters.minSizeBytes]);
 
   return (
     <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">

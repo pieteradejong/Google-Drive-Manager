@@ -144,17 +144,6 @@ export const FolderTreeView = ({ files, childrenMap, onFileClick }: FolderTreeVi
     return result;
   }, [files, childrenMap, folderDepths, maxDepth]);
   
-  // Show loading state while building
-  if (isBuilding || !treeData) {
-    return (
-      <LoadingState
-        operation="Building folder tree"
-        details={`Processing ${files.length} files...`}
-        progress={buildProgress}
-      />
-    );
-  }
-  
   // Color scale based on depth
   const getColor = (depth: number): string => {
     const colors = [
@@ -168,7 +157,7 @@ export const FolderTreeView = ({ files, childrenMap, onFileClick }: FolderTreeVi
     return colors[Math.min(depth, colors.length - 1)];
   };
   
-  // Calculate max size for scaling
+  // Calculate max size for scaling (must be before early return to follow Rules of Hooks)
   const maxSize = useMemo(() => {
     return measureSync('FolderTreeView: calculateMaxSize', () => {
       if (!treeData) return 1;
@@ -182,10 +171,12 @@ export const FolderTreeView = ({ files, childrenMap, onFileClick }: FolderTreeVi
     }, 200);
   }, [treeData]);
   
+  // D3 visualization effect (must be before early return to follow Rules of Hooks)
   useEffect(() => {
-    if (!svgRef.current || !containerRef.current || !treeData) return;
+    const svgNode = svgRef.current;  // Copy ref for cleanup
+    if (!svgNode || !containerRef.current || !treeData) return;
     
-    const svg = select(svgRef.current);
+    const svg = select(svgNode);
     svg.selectAll('*').remove();
     
     const width = containerRef.current.clientWidth;
@@ -343,16 +334,16 @@ export const FolderTreeView = ({ files, childrenMap, onFileClick }: FolderTreeVi
     return () => {
       svg.on('.zoom', null);
     };
-  }, [treeData, orientation, maxSize, maxDepth, onFileClick]);
+  }, [treeData, orientation, maxSize, maxDepth, onFileClick, getColor]);
   
-  if (!treeData) {
+  // Show loading state while building
+  if (isBuilding || !treeData) {
     return (
-      <div className="flex items-center justify-center h-full bg-gray-50">
-        <div className="text-center text-gray-500">
-          <p className="text-lg font-medium mb-2">No folders to display</p>
-          <p className="text-sm">Run a full scan to see folder structure</p>
-        </div>
-      </div>
+      <LoadingState
+        operation="Building folder tree"
+        details={`Processing ${files.length} files...`}
+        progress={buildProgress}
+      />
     );
   }
   

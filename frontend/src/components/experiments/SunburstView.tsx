@@ -21,7 +21,8 @@ export const SunburstView = ({ files, childrenMap, onFileClick }: SunburstViewPr
   const [warning, setWarning] = useState<string | null>(null);
   
   useEffect(() => {
-    if (!svgRef.current || files.length === 0) {
+    const svgNode = svgRef.current;  // Copy ref for cleanup
+    if (!svgNode || files.length === 0) {
       setWarning(null);
       return;
     }
@@ -29,11 +30,11 @@ export const SunburstView = ({ files, childrenMap, onFileClick }: SunburstViewPr
     setWarning(null); // Reset warning
     
     try {
-      const svg = select(svgRef.current);
+      const svg = select(svgNode);
       svg.selectAll('*').remove();
       
-      const width = svgRef.current.clientWidth;
-      const height = svgRef.current.clientHeight;
+      const width = svgNode.clientWidth;
+      const height = svgNode.clientHeight;
       const radius = Math.min(width, height) / 2;
       
       if (width === 0 || height === 0) return; // Guard against zero dimensions
@@ -208,22 +209,22 @@ export const SunburstView = ({ files, childrenMap, onFileClick }: SunburstViewPr
       
     } catch (error) {
       console.error('Error rendering Sunburst:', error);
-      if (svgRef.current) {
-        const svg = select(svgRef.current);
+      if (svgNode) {
+        const svg = select(svgNode);
         svg.selectAll('*').remove();
         svg.append('text')
-          .attr('x', svgRef.current.clientWidth / 2)
-          .attr('y', svgRef.current.clientHeight / 2)
+          .attr('x', svgNode.clientWidth / 2)
+          .attr('y', svgNode.clientHeight / 2)
           .attr('text-anchor', 'middle')
           .attr('fill', '#f00')
           .text('Error rendering visualization. Try a different view.');
       }
     }
     
-    // Cleanup function
+    // Cleanup function - use captured svgNode, not ref
     return () => {
-      if (svgRef.current) {
-        select(svgRef.current).selectAll('*').remove();
+      if (svgNode) {
+        select(svgNode).selectAll('*').remove();
       }
     };
   }, [files, childrenMap, onFileClick]);

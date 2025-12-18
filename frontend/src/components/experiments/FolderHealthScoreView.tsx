@@ -126,6 +126,20 @@ export const FolderHealthScoreView = ({ files, childrenMap, onFileClick }: Folde
     return result;
   }, [files, childrenMap]);
   
+  // Sort folders (must be before early return to follow Rules of Hooks)
+  const sortedFolders = useMemo(() => {
+    if (!folderHealth) return [];
+    const sorted = [...folderHealth];
+    if (sortBy === 'score') {
+      sorted.sort((a, b) => a.score - b.score); // Lowest score first (most problematic)
+    } else if (sortBy === 'size') {
+      sorted.sort((a, b) => (b.folder.calculatedSize || 0) - (a.folder.calculatedSize || 0));
+    } else {
+      sorted.sort((a, b) => b.fileCount - a.fileCount);
+    }
+    return sorted.slice(0, 100); // Limit to top 100
+  }, [folderHealth, sortBy]);
+  
   // Show loading state during analysis
   if (isAnalyzing) {
     const folderCount = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
@@ -137,19 +151,6 @@ export const FolderHealthScoreView = ({ files, childrenMap, onFileClick }: Folde
       />
     );
   }
-
-  // Sort folders
-  const sortedFolders = useMemo(() => {
-    const sorted = [...folderHealth];
-    if (sortBy === 'score') {
-      sorted.sort((a, b) => a.score - b.score); // Lowest score first (most problematic)
-    } else if (sortBy === 'size') {
-      sorted.sort((a, b) => (b.folder.calculatedSize || 0) - (a.folder.calculatedSize || 0));
-    } else {
-      sorted.sort((a, b) => b.fileCount - a.fileCount);
-    }
-    return sorted.slice(0, 100); // Limit to top 100
-  }, [folderHealth, sortBy]);
 
   const getScoreColor = (score: number) => {
     if (score >= 80) return 'text-green-600';

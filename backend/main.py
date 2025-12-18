@@ -1,4 +1,5 @@
 """FastAPI application entry point."""
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -23,10 +24,27 @@ from .cache import (
 )
 from .analytics import save_full_scan_analytics_cache
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events."""
+    # Startup
+    try:
+        get_service()
+        log_operation("startup.service_init", logger_name="main", status="success")
+    except FileNotFoundError:
+        perf_logger.warning("startup.service_init", message="Google OAuth credentials not found. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars, or add credentials.json to project root.")
+    except Exception as e:
+        perf_logger.warning("startup.service_init", message=f"Could not initialize Drive service: {str(e)}")
+    yield
+    # Shutdown (nothing to clean up currently)
+
+
 app = FastAPI(
     title="Google Drive Manager API",
     description="API for scanning and visualizing Google Drive structure",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # GZip responses (especially analytics payloads)
@@ -984,15 +1002,3 @@ async def analytics_view(
         )
 
     raise HTTPException(status_code=404, detail=f"Unknown analytics view '{view}'")
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize service on startup."""
-    try:
-        get_service()
-        log_operation("startup.service_init", logger_name="main", status="success")
-    except FileNotFoundError:
-        perf_logger.warning("startup.service_init", message="Google OAuth credentials not found. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET env vars, or add credentials.json to project root.")
-    except Exception as e:
-        perf_logger.warning("startup.service_init", message=f"Could not initialize Drive service: {str(e)}")

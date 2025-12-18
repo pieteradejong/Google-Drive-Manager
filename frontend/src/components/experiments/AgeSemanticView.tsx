@@ -42,8 +42,15 @@ export const AgeSemanticView = ({ files, childrenMap, onFileClick }: AgeSemantic
 
   const semanticQuery = useAnalyticsView('semantic', undefined, true);
   const ageSemanticQuery = useAnalyticsView('age_semantic', undefined, true);
-  const folderCategory: Record<string, { category: string }> = (semanticQuery.data as any)?.data?.folder_category || {};
-  const ageSemantic = (ageSemanticQuery.data as any)?.data;
+  
+  // Memoize to avoid creating new object on every render
+  const folderCategory = useMemo(() => {
+    return (semanticQuery.data as any)?.data?.folder_category || {};
+  }, [(semanticQuery.data as any)?.data?.folder_category]) as Record<string, { category: string }>;
+  
+  const ageSemantic = useMemo(() => {
+    return (ageSemanticQuery.data as any)?.data;
+  }, [(ageSemanticQuery.data as any)?.data]);
 
   const categoryNames = useMemo(() => {
     const keys = Object.keys(ageSemantic?.matrix || {});

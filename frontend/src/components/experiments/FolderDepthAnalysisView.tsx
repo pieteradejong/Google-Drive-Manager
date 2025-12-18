@@ -74,22 +74,11 @@ export const FolderDepthAnalysisView = ({ files, childrenMap, onFileClick }: Fol
     }, 200);
     
     return result;
-  }, [files, childrenMap]);
+  }, [files]);
   
-  // Show loading state while calculating
-  if (isCalculating) {
-    const folderCount = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
-    return (
-      <LoadingState
-        operation="Calculating folder depths"
-        details={`Analyzing ${folderCount.toLocaleString()} folders...`}
-        progress={calcProgress}
-      />
-    );
-  }
-  
-  // Group folders by depth
+  // Group folders by depth (must be before early return to follow Rules of Hooks)
   const depthGroups = useMemo(() => {
+    if (!folderDepths) return {};
     const groups: Record<number, { folders: FileItem[]; totalSize: number }> = {};
     
     files.forEach(file => {
@@ -106,17 +95,9 @@ export const FolderDepthAnalysisView = ({ files, childrenMap, onFileClick }: Fol
     return groups;
   }, [files, folderDepths]);
   
-  // Chart data
-  const chartData = Object.entries(depthGroups)
-    .map(([depth, data]) => ({
-      depth: parseInt(depth),
-      count: data.folders.length,
-      size: data.totalSize,
-    }))
-    .sort((a, b) => a.depth - b.depth);
-  
-  // Deepest paths
+  // Deepest paths (must be before early return to follow Rules of Hooks)
   const deepestFolders = useMemo(() => {
+    if (!folderDepths) return [];
     return Array.from(folderDepths.entries())
       .map(([id, depth]) => ({
         id,
@@ -127,6 +108,27 @@ export const FolderDepthAnalysisView = ({ files, childrenMap, onFileClick }: Fol
       .sort((a, b) => b.depth - a.depth)
       .slice(0, 20);
   }, [folderDepths, files]);
+  
+  // Show loading state while calculating
+  if (isCalculating) {
+    const folderCount = files.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
+    return (
+      <LoadingState
+        operation="Calculating folder depths"
+        details={`Analyzing ${folderCount.toLocaleString()} folders...`}
+        progress={calcProgress}
+      />
+    );
+  }
+  
+  // Chart data
+  const chartData = Object.entries(depthGroups)
+    .map(([depth, data]) => ({
+      depth: parseInt(depth),
+      count: data.folders.length,
+      size: data.totalSize,
+    }))
+    .sort((a, b) => a.depth - b.depth);
   
   const maxDepth = Math.max(...Array.from(folderDepths.values()), 0);
   const avgDepth = folderDepths.size > 0

@@ -62,6 +62,7 @@ export function useEnsureAnalyticsStarted(shouldStart: boolean) {
       startedOnceRef.current = true;
       start.mutate();
     }
+  // start.isPending and start.mutate are stable refs from React Query
   }, [shouldStart, status.data, start.isPending, start.mutate]);
 
   return { status, start };

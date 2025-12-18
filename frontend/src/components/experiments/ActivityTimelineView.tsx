@@ -55,18 +55,7 @@ export const ActivityTimelineView = ({ files, onFileClick }: ActivityTimelineVie
     return result;
   }, [files]);
   
-  // Show loading state during processing
-  if (isProcessing) {
-    return (
-      <LoadingState
-        operation="Building activity timeline"
-        details={`Grouping ${files.length.toLocaleString()} files by date...`}
-        progress={processProgress}
-      />
-    );
-  }
-  
-  // Get date range
+  // Get date range (must be before early return to follow Rules of Hooks)
   const dateRange = useMemo(() => {
     const now = new Date();
     const start = new Date();
@@ -82,8 +71,9 @@ export const ActivityTimelineView = ({ files, onFileClick }: ActivityTimelineVie
     return { start, end: now };
   }, [timeRange]);
   
-  // Generate calendar data
+  // Generate calendar data (must be before early return to follow Rules of Hooks)
   const calendarData = useMemo(() => {
+    if (!activityByDate) return [];
     const data: Array<{ date: string; count: number; intensity: number }> = [];
     const { start, end } = dateRange;
     
@@ -111,7 +101,7 @@ export const ActivityTimelineView = ({ files, onFileClick }: ActivityTimelineVie
     return data;
   }, [activityByDate, dateRange, viewMode]);
   
-  // Get recent activity
+  // Get recent activity (must be before early return to follow Rules of Hooks)
   const recentActivity = useMemo(() => {
     const recent: FileItem[] = [];
     const cutoff = new Date();
@@ -130,6 +120,17 @@ export const ActivityTimelineView = ({ files, onFileClick }: ActivityTimelineVie
       return dateB - dateA;
     }).slice(0, 50);
   }, [files, viewMode]);
+  
+  // Show loading state during processing
+  if (isProcessing) {
+    return (
+      <LoadingState
+        operation="Building activity timeline"
+        details={`Grouping ${files.length.toLocaleString()} files by date...`}
+        progress={processProgress}
+      />
+    );
+  }
   
   const getIntensityColor = (intensity: number): string => {
     if (intensity === 0) return 'bg-gray-100';

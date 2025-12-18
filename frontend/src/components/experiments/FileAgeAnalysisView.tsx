@@ -71,6 +71,46 @@ export const FileAgeAnalysisView = ({ files, onFileClick }: FileAgeAnalysisViewP
     return result;
   }, [files]);
   
+  // Prepare chart data (must be before early return to follow Rules of Hooks)
+  const chartData = useMemo(() => {
+    if (!ageBuckets) return [];
+    return AGE_BUCKETS.map(bucket => {
+      const bucketData = ageBuckets[bucket.label];
+      return {
+        name: bucket.label,
+        count: bucketData?.files.length || 0,
+        size: bucketData?.totalSize || 0,
+        color: bucket.color
+      };
+    });
+  }, [ageBuckets]);
+  
+  // Get files for selected age bucket (must be before early return to follow Rules of Hooks)
+  const filteredFiles = useMemo(() => {
+    if (ageFilter === 'all') {
+      return files;
+    }
+    return ageBuckets?.[ageFilter]?.files || [];
+  }, [ageFilter, ageBuckets, files]);
+  
+  // Sort filtered files (must be before early return to follow Rules of Hooks)
+  const sortedFiles = useMemo(() => {
+    const sorted = sortByDate(filteredFiles);
+    return sortBy === 'oldest' ? sorted.reverse() : sorted;
+  }, [filteredFiles, sortBy]);
+  
+  // Get oldest files (must be before early return to follow Rules of Hooks)
+  const oldestFiles = useMemo(() => {
+    const filesWithDate = files
+      .filter(f => f.modifiedTime)
+      .sort((a, b) => {
+        const dateA = new Date(a.modifiedTime!).getTime();
+        const dateB = new Date(b.modifiedTime!).getTime();
+        return dateA - dateB; // Oldest first
+      });
+    return filesWithDate.slice(0, 50);
+  }, [files]);
+  
   // Show loading state during analysis
   if (isAnalyzing) {
     const fileCount = files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length;
@@ -82,45 +122,6 @@ export const FileAgeAnalysisView = ({ files, onFileClick }: FileAgeAnalysisViewP
       />
     );
   }
-  
-  // Prepare chart data
-  const chartData = useMemo(() => {
-    return AGE_BUCKETS.map(bucket => {
-      const bucketData = ageBuckets[bucket.label];
-      return {
-        name: bucket.label,
-        count: bucketData.files.length,
-        size: bucketData.totalSize,
-        color: bucket.color
-      };
-    });
-  }, [ageBuckets]);
-  
-  // Get files for selected age bucket
-  const filteredFiles = useMemo(() => {
-    if (ageFilter === 'all') {
-      return files;
-    }
-    return ageBuckets[ageFilter]?.files || [];
-  }, [ageFilter, ageBuckets, files]);
-  
-  // Sort filtered files
-  const sortedFiles = useMemo(() => {
-    const sorted = sortByDate(filteredFiles);
-    return sortBy === 'oldest' ? sorted.reverse() : sorted;
-  }, [filteredFiles, sortBy]);
-  
-  // Get oldest files
-  const oldestFiles = useMemo(() => {
-    const filesWithDate = files
-      .filter(f => f.modifiedTime)
-      .sort((a, b) => {
-        const dateA = new Date(a.modifiedTime!).getTime();
-        const dateB = new Date(b.modifiedTime!).getTime();
-        return dateA - dateB; // Oldest first
-      });
-    return filesWithDate.slice(0, 50);
-  }, [files]);
   
   const getAgeInDays = (modifiedTime: string | undefined): number => {
     if (!modifiedTime) return Infinity;

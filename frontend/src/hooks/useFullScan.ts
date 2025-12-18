@@ -112,6 +112,8 @@ export const useFullScan = () => {
         isSlow: true,
       });
     }
+  // Intentionally watching specific nested properties for timing updates
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [progress?.status, progress?.progress?.progress]);
 
   // Cache the result when scan completes

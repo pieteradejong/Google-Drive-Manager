@@ -46,9 +46,18 @@ export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepth
     return map;
   }, [files]);
 
-  const depthById: Record<string, number> = analytics?.depth_by_id || {};
-  const distribution: Array<{ depth: number; folder_count: number; total_size: number }> = analytics?.distribution || [];
-  const deepestFolderIds: string[] = analytics?.deepest_folder_ids || [];
+  // Memoize to avoid creating new objects/arrays on every render
+  const depthById = useMemo(() => {
+    return (analytics?.depth_by_id || {}) as Record<string, number>;
+  }, [analytics?.depth_by_id]);
+  
+  const distribution = useMemo(() => {
+    return (analytics?.distribution || []) as Array<{ depth: number; folder_count: number; total_size: number }>;
+  }, [analytics?.distribution]);
+  
+  const deepestFolderIds = useMemo(() => {
+    return (analytics?.deepest_folder_ids || []) as string[];
+  }, [analytics?.deepest_folder_ids]);
 
   const folderDepths = useMemo(() => new Map(Object.entries(depthById).map(([id, d]) => [id, Number(d)])), [depthById]);
 

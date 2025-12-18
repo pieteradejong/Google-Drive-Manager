@@ -31,10 +31,23 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
 
   const analyticsQuery = useAnalyticsView('semantic', undefined, true);
   const analytics = (analyticsQuery.data as any)?.data;
-  const folderCategory: Record<string, { category: string; confidence?: string; method?: string }> = analytics?.folder_category || {};
-  const categoryFolderIds: Record<string, string[]> = analytics?.category_folder_ids || {};
-  const uncategorizedFolderIds: string[] = analytics?.uncategorized_folder_ids || [];
-  const totals: Record<string, { folder_count: number; total_size: number }> = analytics?.totals || {};
+  
+  // Memoize to avoid creating new objects/arrays on every render
+  const folderCategory = useMemo(() => {
+    return (analytics?.folder_category || {}) as Record<string, { category: string; confidence?: string; method?: string }>;
+  }, [analytics?.folder_category]);
+  
+  const categoryFolderIds = useMemo(() => {
+    return (analytics?.category_folder_ids || {}) as Record<string, string[]>;
+  }, [analytics?.category_folder_ids]);
+  
+  const uncategorizedFolderIds = useMemo(() => {
+    return (analytics?.uncategorized_folder_ids || []) as string[];
+  }, [analytics?.uncategorized_folder_ids]);
+  
+  const totals = useMemo(() => {
+    return (analytics?.totals || {}) as Record<string, { folder_count: number; total_size: number }>;
+  }, [analytics?.totals]);
 
   const fileById = useMemo(() => {
     const map = new Map<string, FileItem>();
@@ -73,22 +86,7 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
     return (pathCache as any).__getPath(folderId);
   };
 
-  if (analyticsQuery.isLoading || analyticsQuery.isFetching) {
-    return (
-      <LoadingState
-        operation="Preparing semantic analysis"
-        details="Loading cached semantic categories from server..."
-      />
-    );
-  }
-  if (analyticsQuery.error) {
-    return (
-      <div className="p-6 text-sm text-red-700">
-        Failed to load semantic analytics. Try again in a moment.
-      </div>
-    );
-  }
-  
+  // All useMemo hooks must be before early returns to follow Rules of Hooks
   const uncategorizedTotalSize = useMemo(() => {
     return uncategorizedFolderIds.reduce((sum, id) => {
       const f = fileById.get(id);
@@ -160,22 +158,6 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
     );
   }, [selectedFolders, searchQuery, minSizeMB]);
   
-  // Get classification info for a folder
-  const getClassificationInfo = (folder: FileItem) => {
-    if (selectedCategory === 'Uncategorized') {
-      return { confidence: 'low', method: 'none' };
-    }
-
-    const info = folderCategory[folder.id];
-    if (!info) return { confidence: 'low', method: 'unknown' };
-    return { confidence: info.confidence || 'low', method: info.method || 'unknown' };
-  };
-  
-  // Format folder path
-  const formatFolderPath = (folder: FileItem): string => {
-    return getPathString(folder.id);
-  };
-  
   // Chart data for pie chart
   const pieChartData = useMemo(() => {
     return stats.map(stat => ({
@@ -193,6 +175,39 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
       size: stat.totalSize
     }));
   }, [stats]);
+
+  // Early returns for loading/error states (after all hooks)
+  if (analyticsQuery.isLoading || analyticsQuery.isFetching) {
+    return (
+      <LoadingState
+        operation="Preparing semantic analysis"
+        details="Loading cached semantic categories from server..."
+      />
+    );
+  }
+  if (analyticsQuery.error) {
+    return (
+      <div className="p-6 text-sm text-red-700">
+        Failed to load semantic analytics. Try again in a moment.
+      </div>
+    );
+  }
+  
+  // Get classification info for a folder
+  const getClassificationInfo = (folder: FileItem) => {
+    if (selectedCategory === 'Uncategorized') {
+      return { confidence: 'low', method: 'none' };
+    }
+
+    const info = folderCategory[folder.id];
+    if (!info) return { confidence: 'low', method: 'unknown' };
+    return { confidence: info.confidence || 'low', method: info.method || 'unknown' };
+  };
+  
+  // Format folder path
+  const formatFolderPath = (folder: FileItem): string => {
+    return getPathString(folder.id);
+  };
   
   return (
     <div className="flex h-full">
