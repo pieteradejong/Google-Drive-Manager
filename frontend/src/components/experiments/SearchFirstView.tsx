@@ -27,7 +27,7 @@ function useDebounce<T>(value: T, delay: number): T {
   return debouncedValue;
 }
 
-export const SearchFirstView = ({ files, childrenMap, onFileClick }: SearchFirstViewProps) => {
+export const SearchFirstView = ({ files, onFileClick }: SearchFirstViewProps) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'name' | 'size' | 'date'>('name');
   const [minSize, setMinSize] = useState<number | null>(null);

@@ -1,6 +1,6 @@
 /** File Type Efficiency - Compare compressed vs uncompressed formats */
 import { useMemo } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TrendingDown, FileText, Image } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
 import type { FileItem } from '../../types/drive';
@@ -33,12 +33,12 @@ const TYPE_COMPARISONS = {
   },
 };
 
-export const FileTypeEfficiencyView = ({ files, childrenMap, onFileClick }: FileTypeEfficiencyViewProps) => {
+export const FileTypeEfficiencyView = ({ files }: FileTypeEfficiencyViewProps) => {
   // Analyze document types
   const documentStats = useMemo(() => {
     const stats = new Map<string, { count: number; totalSize: number; avgSize: number }>();
     
-    Object.entries(TYPE_COMPARISONS.documents).forEach(([key, { pattern, label }]) => {
+    Object.entries(TYPE_COMPARISONS.documents).forEach(([_key, { pattern, label }]) => {
       const matching = files.filter(f => pattern.test(f.mimeType));
       const totalSize = matching.reduce((sum, f) => sum + (f.size || 0), 0);
       stats.set(label, {
@@ -55,7 +55,7 @@ export const FileTypeEfficiencyView = ({ files, childrenMap, onFileClick }: File
   const imageStats = useMemo(() => {
     const stats = new Map<string, { count: number; totalSize: number; avgSize: number }>();
     
-    Object.entries(TYPE_COMPARISONS.images).forEach(([key, { pattern, label }]) => {
+    Object.entries(TYPE_COMPARISONS.images).forEach(([_key, { pattern, label }]) => {
       const matching = files.filter(f => pattern.test(f.mimeType));
       const totalSize = matching.reduce((sum, f) => sum + (f.size || 0), 0);
       stats.set(label, {

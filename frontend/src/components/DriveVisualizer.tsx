@@ -1,11 +1,10 @@
 /** Main Drive visualization component */
 import { useState, useEffect } from 'react';
-import { Loader2, RefreshCw, LayoutGrid, List, AlertCircle, Zap, Database, Clock, ThumbsUp, ThumbsDown, BookOpen } from 'lucide-react';
+import { Loader2, RefreshCw, LayoutGrid, AlertCircle, Zap, Database, Clock, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useQuickScan } from '../hooks/useQuickScan';
 import { useFullScan } from '../hooks/useFullScan';
 import { useEnsureAnalyticsStarted } from '../hooks/useAnalytics';
 import { PerformanceIndicator } from './PerformanceIndicator';
-import { VisualizationsDocumentation } from './VisualizationsDocumentation';
 import { useVisualizationStore } from '../stores/visualizationStore';
 import { ListView } from './ListView';
 import { api } from '../api/client';
@@ -103,7 +102,6 @@ export const DriveVisualizer = () => {
   const { progress: fullProgress, result: fullResult, isLoading: fullLoading, error: fullError, startScan: startFullScan, dataUpdatedAt: fullDataUpdatedAt, timing: fullTiming } = useFullScan();
   
   const [displayData, setDisplayData] = useState<ScanResponse | null>(null);
-  const [showDocumentation, setShowDocumentation] = useState(false);
 
   // Kick off backend derived analytics computation once full scan data is available
   useEnsureAnalyticsStarted(Boolean(fullResult));
@@ -138,10 +136,6 @@ export const DriveVisualizer = () => {
       setDisplayData(quickResponse);
     }
   }, [quickData, fullResult]);
-  
-  // Show notice if data was loaded from cache
-  const isCachedData = (quickData && quickDataUpdatedAt && Date.now() - quickDataUpdatedAt > 60000) ||
-                       (fullResult && fullDataUpdatedAt && Date.now() - fullDataUpdatedAt > 60000);
 
   const handleQuickScan = async () => {
     try {
@@ -250,7 +244,8 @@ export const DriveVisualizer = () => {
     };
 
     let ExperimentComponent: React.ComponentType<any> | null = null;
-    let experimentProps = commonProps;
+    // Use any for experimentProps to allow flexible prop passing to different experiment components
+    let experimentProps: Record<string, any> = commonProps;
 
     switch (currentExperiment) {
       case 'folder-first':
@@ -281,7 +276,8 @@ export const DriveVisualizer = () => {
         break;
       case 'storage-dashboard':
         ExperimentComponent = StorageDashboardView;
-        experimentProps = { ...commonProps, stats: displayData?.overview, quotaInfo: displayData?.quota };
+        // StorageDashboardView expects stats and quotaInfo but they're optional
+        experimentProps = { ...commonProps, stats: displayData?.stats, quotaInfo: undefined };
         break;
       case 'large-files':
         ExperimentComponent = LargeFilesView;

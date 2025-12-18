@@ -1,5 +1,5 @@
 /** Orphaned Files Detector - Find files with broken parent references */
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { AlertTriangle, File, Folder, Unlink } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';
@@ -12,7 +12,7 @@ interface OrphanedFilesViewProps {
   onFileClick?: (file: FileItem) => void;
 }
 
-export const OrphanedFilesView = ({ files, childrenMap, onFileClick }: OrphanedFilesViewProps) => {
+export const OrphanedFilesView = ({ files, onFileClick }: OrphanedFilesViewProps) => {
   const [isAnalyzing, setIsAnalyzing] = useState(true);
   const [analysisProgress, setAnalysisProgress] = useState(0);
   

@@ -42,8 +42,7 @@ export const SunburstView = ({ files, childrenMap, onFileClick }: SunburstViewPr
       const rootFiles = files.filter((f) => f.parents.length === 0);
       if (rootFiles.length === 0) return;
       
-      // Track visited nodes to prevent cycles
-      const visited = new Set<string>();
+      // Cycle detection is done via path tracking
       const MAX_DEPTH = 10; // Limit recursion depth
       const MAX_NODES = 5000; // Limit total nodes to prevent browser crash
       let nodeCount = 0;
@@ -154,12 +153,12 @@ export const SunburstView = ({ files, childrenMap, onFileClick }: SunburstViewPr
             return descendants;
           })();
       
-      const arcs = g
+      g
         .selectAll('path')
         .data(visibleDescendants)
         .enter()
         .append('path')
-        .attr('fill', (d: any, i) => color(i.toString()))
+        .attr('fill', (_d: any, i) => color(i.toString()))
         .attr('stroke', '#fff')
         .attr('stroke-width', 1)
         .attr('d', arcGen as any)

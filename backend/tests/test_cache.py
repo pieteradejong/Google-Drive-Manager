@@ -72,15 +72,20 @@ class TestCachePaths:
 class TestCacheOperations:
     """Tests for cache load/save operations."""
     
-    @patch('backend.cache.get_cache_path')
-    @patch('pathlib.Path.exists')
-    @patch('builtins.open', new_callable=mock_open, read_data='{"data": {"test": "value"}, "metadata": {"timestamp": "2024-01-15T10:30:00Z", "cache_version": 1}}')
-    def test_load_cache_success(self, mock_file, mock_exists, mock_get_path):
+    def test_load_cache_success(self, tmp_path):
         """Test loading cache successfully."""
-        mock_exists.return_value = True
-        mock_get_path.return_value = Path('test_cache.json')
+        # Create a real cache file
+        cache_dir = tmp_path / 'cache'
+        cache_dir.mkdir()
+        cache_file = cache_dir / 'quick_scan_cache.json'
+        cache_data_content = {
+            "data": {"test": "value"},
+            "metadata": {"timestamp": "2024-01-15T10:30:00Z", "cache_version": 1}
+        }
+        cache_file.write_text(json.dumps(cache_data_content))
         
-        cache_data = load_cache('quick_scan')
+        with patch('backend.cache.get_cache_path', return_value=cache_file):
+            cache_data = load_cache('quick_scan')
         
         assert cache_data is not None
         assert cache_data['data']['test'] == 'value'
@@ -227,31 +232,51 @@ class TestCacheValidation:
 class TestCacheManagement:
     """Tests for cache management functions."""
     
-    @patch('backend.cache.get_cache_path')
-    @patch('pathlib.Path.exists')
-    @patch('pathlib.Path.unlink')
-    def test_clear_cache_specific(self, mock_unlink, mock_exists, mock_get_path):
-        """Test clearing specific cache."""
-        mock_exists.return_value = True
-        mock_get_path.return_value = Path('test_cache.json')
+    def test_clear_cache_specific(self, tmp_path):
+        """Test clearing specific cache (both cache file and metadata sidecar)."""
+        # Create cache directory with files
+        cache_dir = tmp_path / 'cache'
+        cache_dir.mkdir()
+        cache_file = cache_dir / 'quick_scan_cache.json'
+        meta_file = cache_dir / 'quick_scan_cache.meta.json'
+        cache_file.write_text('{"data": {}}')
+        meta_file.write_text('{"timestamp": "2024-01-15T10:30:00Z"}')
         
-        result = clear_cache('quick_scan')
+        with patch('backend.cache.get_cache_path', return_value=cache_file), \
+             patch('backend.cache.get_cache_metadata_path', return_value=meta_file):
+            result = clear_cache('quick_scan')
         
         assert result is True
-        mock_unlink.assert_called_once()
+        # Both files should be deleted
+        assert not cache_file.exists()
+        assert not meta_file.exists()
     
-    @patch('backend.cache.get_cache_dir')
-    def test_clear_cache_all(self, mock_get_dir):
-        """Test clearing all caches."""
-        mock_dir = MagicMock()
-        mock_cache_file = MagicMock()
-        mock_dir.glob.return_value = [mock_cache_file]
-        mock_get_dir.return_value = mock_dir
+    def test_clear_cache_all(self, tmp_path):
+        """Test clearing all caches (including metadata sidecars)."""
+        # Create cache directory with multiple files
+        cache_dir = tmp_path / 'cache'
+        cache_dir.mkdir()
         
-        result = clear_cache()
+        # Create cache files and metadata sidecars
+        quick_cache = cache_dir / 'quick_scan_cache.json'
+        quick_meta = cache_dir / 'quick_scan_cache.meta.json'
+        full_cache = cache_dir / 'full_scan_cache.json'
+        full_meta = cache_dir / 'full_scan_cache.meta.json'
+        
+        quick_cache.write_text('{}')
+        quick_meta.write_text('{}')
+        full_cache.write_text('{}')
+        full_meta.write_text('{}')
+        
+        with patch('backend.cache.get_cache_dir', return_value=cache_dir):
+            result = clear_cache()
         
         assert result is True
-        mock_cache_file.unlink.assert_called_once()
+        # All files should be deleted
+        assert not quick_cache.exists()
+        assert not quick_meta.exists()
+        assert not full_cache.exists()
+        assert not full_meta.exists()
     
     @patch('backend.cache.load_cache')
     def test_get_cache_metadata_success(self, mock_load_cache):

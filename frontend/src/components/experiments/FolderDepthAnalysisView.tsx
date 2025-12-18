@@ -1,5 +1,5 @@
 /** Folder Depth Analysis - Understand folder structure complexity */
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
 import { Layers, Folder } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';

@@ -3,7 +3,7 @@ import { useState, useMemo } from 'react';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { Folder, Layers, TrendingUp, ChevronDown, ChevronRight, File, Image, Video, FileCode, Archive, FileText } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
-import { analyzeFolderContents, getFolderDescription, type FolderContentSummary } from '../../utils/folderContentAnalyzer';
+import { analyzeFolderContents, getFolderDescription } from '../../utils/folderContentAnalyzer';
 import { LoadingState } from '../LoadingState';
 import { useAnalyticsView } from '../../hooks/useAnalytics';
 import type { FileItem } from '../../types/drive';
@@ -14,12 +14,13 @@ interface FolderDepthViewProps {
   onFileClick?: (file: FileItem) => void;
 }
 
-interface DepthStats {
-  depth: number;
-  folderCount: number;
-  totalSize: number;
-  deepestPaths: Array<{ path: string[]; folder: FileItem }>;
-}
+// DepthStats interface is defined for potential future use
+// interface DepthStats {
+//   depth: number;
+//   folderCount: number;
+//   totalSize: number;
+//   deepestPaths: Array<{ path: string[]; folder: FileItem }>;
+// }
 
 export const FolderDepthView = ({ files, childrenMap, onFileClick }: FolderDepthViewProps) => {
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());

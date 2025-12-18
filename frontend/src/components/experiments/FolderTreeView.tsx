@@ -264,7 +264,7 @@ export const FolderTreeView = ({ files, childrenMap, onFileClick }: FolderTreeVi
         }
       })
       .style('cursor', 'pointer')
-      .on('click', (event, d) => {
+      .on('click', (_event, d) => {
         const node = d.data as TreeNode;
         if (node.id !== 'root') {
           onFileClick?.(node.file);

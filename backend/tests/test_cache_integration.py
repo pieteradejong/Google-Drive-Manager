@@ -66,10 +66,10 @@ class TestQuickScanCaching:
     @patch('backend.main.get_drive_overview')
     @patch('backend.main.get_top_level_folders')
     @patch('backend.main.load_cache')
-    @patch('backend.main.is_cache_valid_time_based')
+    @patch('backend.main.validate_cache_with_drive')
     def test_quick_scan_uses_cache_when_valid(
         self,
-        mock_is_valid,
+        mock_validate,
         mock_load_cache,
         mock_get_top_folders,
         mock_get_overview,
@@ -90,7 +90,9 @@ class TestQuickScanCaching:
             }
         }
         mock_load_cache.return_value = cached_data
-        mock_is_valid.return_value = True
+        mock_validate.return_value = True  # Cache valid via validate_cache_with_drive
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
         
         response = client.get("/api/scan/quick")
         
@@ -103,26 +105,26 @@ class TestQuickScanCaching:
     @patch('backend.main.get_drive_overview')
     @patch('backend.main.get_top_level_folders')
     @patch('backend.main.load_cache')
-    @patch('backend.main.is_cache_valid_time_based')
+    @patch('backend.main.validate_cache_with_drive')
     @patch('backend.main.save_cache')
     def test_quick_scan_refreshes_when_cache_expired(
         self,
         mock_save_cache,
-        mock_is_valid,
+        mock_validate,
         mock_load_cache,
         mock_get_top_folders,
         mock_get_overview,
         mock_get_service,
         client
     ):
-        """Test that quick scan refreshes when cache is expired."""
-        # Cache exists but is expired
+        """Test that quick scan refreshes when cache is expired/invalid."""
+        # Cache exists but is invalid (Drive has changes)
         cached_data = {
             'data': {'overview': {}, 'top_folders': []},
             'metadata': {'timestamp': datetime.now(timezone.utc).isoformat()}
         }
         mock_load_cache.return_value = cached_data
-        mock_is_valid.return_value = False  # Cache expired
+        mock_validate.return_value = False  # Cache invalid via validate_cache_with_drive
         
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service

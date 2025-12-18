@@ -10,7 +10,7 @@ interface SharedFilesAnalysisViewProps {
   onFileClick?: (file: FileItem) => void;
 }
 
-export const SharedFilesAnalysisView = ({ files, childrenMap, onFileClick }: SharedFilesAnalysisViewProps) => {
+export const SharedFilesAnalysisView = ({ files, onFileClick }: SharedFilesAnalysisViewProps) => {
   // Find files with multiple parents (shared files)
   const sharedFiles = useMemo(() => {
     return files.filter(f => f.parents.length > 1);

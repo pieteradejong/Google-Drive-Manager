@@ -1,6 +1,6 @@
 /** File Age Analysis - Find old and unused files */
-import { useMemo, useState, useEffect } from 'react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, Cell } from 'recharts';
+import { useMemo, useState } from 'react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
 import { Calendar, Clock, File, Folder } from 'lucide-react';
 import { formatSize, sortByDate } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';
@@ -21,7 +21,7 @@ const AGE_BUCKETS = [
   { label: '1+ years', days: Infinity, color: '#991b1b' },
 ];
 
-export const FileAgeAnalysisView = ({ files, childrenMap, onFileClick }: FileAgeAnalysisViewProps) => {
+export const FileAgeAnalysisView = ({ files, onFileClick }: FileAgeAnalysisViewProps) => {
   const [ageFilter, setAgeFilter] = useState<string>('all');
   const [sortBy, setSortBy] = useState<'oldest' | 'newest'>('oldest');
   const [isAnalyzing, setIsAnalyzing] = useState(true);

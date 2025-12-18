@@ -30,7 +30,7 @@ const getTypeIcon = (category: string) => {
   }
 };
 
-export const TypeGroupedView = ({ files, childrenMap, onFileClick }: TypeGroupedViewProps) => {
+export const TypeGroupedView = ({ files, onFileClick }: TypeGroupedViewProps) => {
   // Memoize expensive grouping operation
   const groups = useMemo(() => groupByType(files), [files]);
   const categories = useMemo(() => Object.keys(groups), [groups]);
@@ -110,12 +110,12 @@ export const TypeGroupedView = ({ files, childrenMap, onFileClick }: TypeGrouped
                   cx="50%"
                   cy="50%"
                   labelLine={false}
-                  label={({ name, percent }) => `${name}: ${(percent * 100).toFixed(0)}%`}
+                  label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(0)}%`}
                   outerRadius={80}
                   fill="#8884d8"
                   dataKey="value"
                 >
-                  {chartData.map((entry, index) => (
+                  {chartData.map((_entry, index) => (
                     <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                   ))}
                 </Pie>
@@ -144,7 +144,7 @@ export const TypeGroupedView = ({ files, childrenMap, onFileClick }: TypeGrouped
                       cx="50%"
                       cy="50%"
                       labelLine={false}
-                      label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                      label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
                       outerRadius={100}
                       fill="#8884d8"
                       dataKey="value"

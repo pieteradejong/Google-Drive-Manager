@@ -1,5 +1,5 @@
 /** Activity Timeline - Calendar heatmap and activity patterns */
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { Calendar, TrendingUp, File, Folder } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';
@@ -12,7 +12,7 @@ interface ActivityTimelineViewProps {
   onFileClick?: (file: FileItem) => void;
 }
 
-export const ActivityTimelineView = ({ files, childrenMap, onFileClick }: ActivityTimelineViewProps) => {
+export const ActivityTimelineView = ({ files, onFileClick }: ActivityTimelineViewProps) => {
   const [viewMode, setViewMode] = useState<'created' | 'modified'>('modified');
   const [timeRange, setTimeRange] = useState<'week' | 'month' | 'year'>('month');
   const [isProcessing, setIsProcessing] = useState(true);

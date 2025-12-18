@@ -1,5 +1,5 @@
 /** Folder Health Score - Identify problematic folders */
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState } from 'react';
 import { Activity, AlertCircle, CheckCircle, XCircle } from 'lucide-react';
 import { formatSize } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';

@@ -27,7 +27,7 @@ export interface FolderContentSummary {
 export function analyzeFolderContents(
   folder: FileItem,
   children: FileItem[],
-  allFiles: FileItem[]
+  _allFiles: FileItem[] // Reserved for future recursive analysis
 ): FolderContentSummary {
   const files = children.filter(f => f.mimeType !== 'application/vnd.google-apps.folder');
   const subfolders = children.filter(f => f.mimeType === 'application/vnd.google-apps.folder');

@@ -623,6 +623,134 @@ if (isAnalyzing) {
 
 **Key Takeaway**: Less is more. Show what users need to know, not everything possible.
 
+## Testing & Code Quality (December 2024)
+
+### Backend Test Mocking Pitfalls
+
+**Learning**: Python mock patching requires careful consideration of how functions access their dependencies.
+
+**Problems Encountered**:
+1. **Mock patching at wrong level**: Patching `pathlib.Path.exists` doesn't intercept `cache_path.exists()` calls on Path instances
+2. **Mock `open` with file reads**: `mock_open` doesn't work when the actual code path tries to open the real file
+3. **Implementation changes breaking tests**: Adding metadata sidecar files (`.meta.json`) caused tests expecting 1 `unlink` call to fail (now 2 calls)
+4. **Testing validation logic**: Tests patching `is_cache_valid_time_based` failed when implementation actually used `validate_cache_with_drive`
+
+**Solutions Applied**:
+- Use `tmp_path` fixture to create real files instead of complex mocking
+- Patch at the correct module level where functions are imported
+- Update test expectations when implementation adds new file operations
+- Ensure test mocks match actual implementation (not assumed implementation)
+
+**Pattern for File Operations**:
+```python
+def test_load_cache_success(self, tmp_path):
+    """Test with real temp files instead of complex mocks."""
+    cache_dir = tmp_path / 'cache'
+    cache_dir.mkdir()
+    cache_file = cache_dir / 'quick_scan_cache.json'
+    cache_file.write_text(json.dumps({"data": {"test": "value"}}))
+    
+    with patch('backend.cache.get_cache_path', return_value=cache_file):
+        result = load_cache('quick_scan')
+    
+    assert result is not None
+```
+
+**Key Takeaway**: Real files in temp directories are often more reliable than complex mock setups for file I/O testing.
+
+### TanStack Query v5 Breaking Changes
+
+**Learning**: TanStack Query v5 has significant API changes from v4 that TypeScript will catch.
+
+**Changes Discovered**:
+1. `cacheTime` → `gcTime` (garbage collection time)
+2. `mutation.isLoading` → `mutation.isPending`
+3. Generic type inference requires explicit `queryFn` return type annotation
+
+**Before (v4)**:
+```typescript
+useQuery<ResponseType, Error>({
+  queryKey: ['key'],
+  queryFn: () => api.fetch(),
+  cacheTime: 60 * 60 * 1000,
+});
+
+// Mutation check
+if (mutation.isLoading) { ... }
+```
+
+**After (v5)**:
+```typescript
+useQuery({
+  queryKey: ['key'] as const,
+  queryFn: async (): Promise<ResponseType> => api.fetch(),
+  gcTime: 60 * 60 * 1000,
+});
+
+// Mutation check
+if (mutation.isPending) { ... }
+```
+
+**Key Takeaway**: When upgrading major versions, check migration guides for breaking changes. TypeScript errors like "Property 'X' does not exist on type 'NoInfer<TQueryFnData>'" often indicate API changes.
+
+### TypeScript Strict Mode Unused Variables
+
+**Learning**: TypeScript strict mode (`noUnusedLocals`, `noUnusedParameters`) catches dead code but requires discipline to maintain.
+
+**Common Patterns Found**:
+1. **Unused destructured props**: `{ files, childrenMap, onFileClick }` where `childrenMap` isn't used
+2. **Unused imports**: Importing `useEffect` but never using it after refactoring
+3. **Unused loop variables**: `array.map((item, index) => ...)` where `index` isn't needed
+4. **Callback parameters**: Event handlers like `.on('click', (event, d) => ...)` where `event` isn't used
+
+**Solutions Applied**:
+- Prefix intentionally unused variables with underscore: `_index`, `_event`
+- Remove unused imports immediately when refactoring
+- Remove unused props from destructuring if the interface allows
+
+**Pattern**:
+```typescript
+// Before (TypeScript error)
+files.map((file, index) => <div key={file.id}>{file.name}</div>)
+
+// After (no error)
+files.map((file) => <div key={file.id}>{file.name}</div>)
+
+// Or if index needed elsewhere but not here
+files.map((file, _index) => <div key={file.id}>{file.name}</div>)
+```
+
+**Key Takeaway**: Add ESLint config with `@typescript-eslint/no-unused-vars` set to ignore underscore-prefixed variables for cleaner code.
+
+### ESLint Configuration for React + TypeScript
+
+**Learning**: A proper ESLint config prevents many issues before they reach the test suite.
+
+**Recommended Config** (`.eslintrc.cjs`):
+```javascript
+module.exports = {
+  root: true,
+  env: { browser: true, es2020: true },
+  extends: [
+    'eslint:recommended',
+    'plugin:@typescript-eslint/recommended',
+    'plugin:react-hooks/recommended',
+  ],
+  parser: '@typescript-eslint/parser',
+  rules: {
+    '@typescript-eslint/no-unused-vars': ['warn', { 
+      argsIgnorePattern: '^_',
+      varsIgnorePattern: '^_',
+    }],
+    '@typescript-eslint/no-explicit-any': 'warn',
+  },
+};
+```
+
+**Key Takeaway**: Configure ESLint to allow underscore-prefixed unused variables for intentional cases, and warn (not error) on `any` usage for D3.js interop.
+
+---
+
 ## Conclusion
 
 The key learnings from this project emphasize:

@@ -1,5 +1,5 @@
 /** Large Files/Folders Finder - Sortable table with filters */
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { File, Folder, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { sortBySize, sortByDate, sortByName, formatSize } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';
@@ -15,7 +15,7 @@ interface LargeFilesViewProps {
 type SortField = 'name' | 'size' | 'date' | 'type';
 type SortDirection = 'asc' | 'desc';
 
-export const LargeFilesView = ({ files, childrenMap, onFileClick }: LargeFilesViewProps) => {
+export const LargeFilesView = ({ files, onFileClick }: LargeFilesViewProps) => {
   const [minSizeMB, setMinSizeMB] = useState<number>(0);
   const [sortField, setSortField] = useState<SortField>('size');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
@@ -29,7 +29,7 @@ export const LargeFilesView = ({ files, childrenMap, onFileClick }: LargeFilesVi
     setProcessProgress(0);
     
     const result = measureSync('LargeFilesView: filterAndSort', () => {
-    let filtered = files.filter(f => {
+    const filtered = files.filter(f => {
       const size = f.calculatedSize || f.size || 0;
       const sizeMB = size / (1024 * 1024);
       

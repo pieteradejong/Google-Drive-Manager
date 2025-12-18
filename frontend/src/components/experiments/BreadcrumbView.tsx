@@ -36,7 +36,7 @@ export const BreadcrumbView = ({
             <Home size={16} />
             <span>Home</span>
           </button>
-          {folderPath.map((folder, idx) => (
+          {folderPath.map((folder) => (
             <div key={folder.id} className="flex items-center gap-2">
               <span className="text-gray-400">/</span>
               <button

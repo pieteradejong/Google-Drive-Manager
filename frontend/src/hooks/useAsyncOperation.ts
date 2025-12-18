@@ -85,7 +85,7 @@ export function useChunkedWork<T>(
   const [result, setResult] = useState<T | null>(null);
   const [isProcessing, setIsProcessing] = useState(true);
   const [progress, setProgress] = useState(0);
-  const [operation, setOperation] = useState(operationName);
+  const [operation] = useState(operationName);
 
   useEffect(() => {
     let cancelled = false;

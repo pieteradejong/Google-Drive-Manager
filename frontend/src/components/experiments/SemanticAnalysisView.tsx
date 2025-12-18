@@ -217,7 +217,7 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
           </div>
           
           {/* Category List */}
-          {stats.map((stat, index) => {
+          {stats.map((stat) => {
             const category = getCategoryByName(stat.name);
             const isSelected = selectedCategory === stat.name;
             
@@ -294,7 +294,7 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
                         cx="50%"
                         cy="50%"
                         labelLine={false}
-                        label={({ name, percentage }) => `${name}: ${percentage.toFixed(1)}%`}
+                        label={({ name, percent }) => `${name}: ${((percent || 0) * 100).toFixed(1)}%`}
                         outerRadius={120}
                         fill="#8884d8"
                         dataKey="value"
@@ -353,7 +353,7 @@ export const SemanticAnalysisView = ({ files, childrenMap, onFileClick }: Semant
                   <p className="text-gray-600 mt-1">
                     {filteredFolders.length} of {selectedFolders.length} folders
                     {selectedCategory !== 'Uncategorized' && (
-                      <> • {formatSize((categorized[selectedCategory]?.totalSize || 0))} total</>
+                      <> • {formatSize(stats.find(s => s.name === selectedCategory)?.totalSize || 0)} total</>
                     )}
                   </p>
                 </div>

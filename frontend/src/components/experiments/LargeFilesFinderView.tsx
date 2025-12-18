@@ -1,5 +1,5 @@
 /** Large Files/Folders Finder - Sortable table to find space hogs */
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { ArrowUpDown, ArrowUp, ArrowDown, Filter } from 'lucide-react';
 import { sortBySize, sortByDate, sortByName, formatSize } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';
@@ -15,7 +15,7 @@ interface LargeFilesFinderViewProps {
 type SortField = 'name' | 'size' | 'type' | 'modified';
 type SortDirection = 'asc' | 'desc';
 
-export const LargeFilesFinderView = ({ files, childrenMap, onFileClick }: LargeFilesFinderViewProps) => {
+export const LargeFilesFinderView = ({ files, onFileClick }: LargeFilesFinderViewProps) => {
   const [sortField, setSortField] = useState<SortField>('size');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [minSizeMB, setMinSizeMB] = useState<number>(0);

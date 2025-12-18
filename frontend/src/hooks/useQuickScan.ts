@@ -26,11 +26,11 @@ export const useQuickScan = () => {
     error,
     isFetching,
     dataUpdatedAt
-  } = useQuery<QuickScanResponse, Error>({
-    queryKey: ['quickScan'],
-    queryFn: () => api.quickScan(),
+  } = useQuery({
+    queryKey: ['quickScan'] as const,
+    queryFn: async (): Promise<QuickScanResponse> => api.quickScan(),
     staleTime: 5 * 60 * 1000, // 5 minutes
-    cacheTime: 60 * 60 * 1000, // 1 hour
+    gcTime: 60 * 60 * 1000, // 1 hour (renamed from cacheTime in TanStack Query v5)
     enabled: true, // Load cached data on mount
     refetchOnMount: false, // Don't refetch if we have cached data
   });
@@ -77,7 +77,7 @@ export const useQuickScan = () => {
 
   return {
     data: data || null,
-    isLoading: isLoading || scanMutation.isLoading || isFetching,
+    isLoading: isLoading || scanMutation.isPending || isFetching,
     error: error || scanMutation.error,
     scan,
     dataUpdatedAt, // For cache status indicators

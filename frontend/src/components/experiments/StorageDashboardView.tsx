@@ -1,6 +1,6 @@
 /** Storage Breakdown Dashboard - Quick overview of storage usage */
 import { useMemo } from 'react';
-import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { PieChart, Pie, Cell, BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { HardDrive, Folder, File, TrendingUp } from 'lucide-react';
 import { groupByType, sortBySize, formatSize } from '../../utils/navigation';
 import type { FileItem } from '../../types/drive';
@@ -23,7 +23,7 @@ interface StorageDashboardViewProps {
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8', '#82ca9d', '#ffc658'];
 
-export const StorageDashboardView = ({ files, childrenMap, onFileClick, stats, quotaInfo }: StorageDashboardViewProps) => {
+export const StorageDashboardView = ({ files, onFileClick, stats, quotaInfo }: StorageDashboardViewProps) => {
   // Group files by type for pie chart
   const typeGroups = useMemo(() => groupByType(files), [files]);
   
@@ -68,7 +68,6 @@ export const StorageDashboardView = ({ files, childrenMap, onFileClick, stats, q
   const totalSize = stats?.total_size || files.reduce((sum, f) => sum + (f.calculatedSize || f.size || 0), 0);
   const totalFiles = stats?.total_files || files.length;
   const folderCount = stats?.folder_count || files.filter(f => f.mimeType === 'application/vnd.google-apps.folder').length;
-  const fileCount = stats?.file_count || files.filter(f => f.mimeType !== 'application/vnd.google-apps.folder').length;
   
   return (
     <div className="flex flex-col h-full overflow-auto p-6 bg-gray-50">
@@ -148,12 +147,12 @@ export const StorageDashboardView = ({ files, childrenMap, onFileClick, stats, q
                     cx="50%"
                     cy="50%"
                     labelLine={false}
-                    label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                    label={({ name, percent }) => `${name} ${((percent || 0) * 100).toFixed(0)}%`}
                     outerRadius={80}
                     fill="#8884d8"
                     dataKey="value"
                   >
-                    {pieData.map((entry, index) => (
+                    {pieData.map((_entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>

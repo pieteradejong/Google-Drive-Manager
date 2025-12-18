@@ -1,7 +1,7 @@
 /** Folder-First Navigation View - Like Finder/Explorer */
 import { Folder, File, ArrowLeft, Home } from 'lucide-react';
 import { useVisualizationStore } from '../../stores/visualizationStore';
-import { getCurrentFolderContents, getFolderPath, getParentFolder, formatSize } from '../../utils/navigation';
+import { getCurrentFolderContents, getFolderPath, formatSize } from '../../utils/navigation';
 import type { FileItem } from '../../types/drive';
 
 interface FolderFirstViewProps {
@@ -15,7 +15,6 @@ export const FolderFirstView = ({ files, childrenMap, onFileClick }: FolderFirst
   
   const currentContents = getCurrentFolderContents(currentFolderId, files, childrenMap);
   const folderPath = getFolderPath(currentFolderId, files);
-  const parentId = getParentFolder(currentFolderId, files);
   
   const handleFolderClick = (folder: FileItem) => {
     pushToHistory(folder.id);

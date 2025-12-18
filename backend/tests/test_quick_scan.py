@@ -64,6 +64,7 @@ class TestQuickScanEndpoint:
         assert len(data['top_folders']) == 1  # Only folder1 has no parents
         assert data['estimated_total_files'] == 1000
     
+    @patch('backend.main.load_cache')
     @patch('backend.main.get_service')
     @patch('backend.main.get_drive_overview')
     @patch('backend.main.get_top_level_folders')
@@ -72,9 +73,13 @@ class TestQuickScanEndpoint:
         mock_get_top_folders,
         mock_get_overview,
         mock_get_service,
+        mock_load_cache,
         client
     ):
         """Test quick scan with empty Drive."""
+        # Ensure no cached data is returned
+        mock_load_cache.return_value = None
+        
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
         

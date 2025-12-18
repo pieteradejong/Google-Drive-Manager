@@ -112,7 +112,7 @@ export function classifyFolderByName(folderName: string): SemanticCategory | nul
  * Analyze folder contents to determine semantic category
  */
 export function classifyFolderByContent(
-  folder: FileItem,
+  _folder: FileItem, // Reserved for future folder-name-based classification
   childIds: string[],
   fileMap: Map<string, FileItem>
 ): SemanticCategory | null {

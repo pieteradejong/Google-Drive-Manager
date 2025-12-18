@@ -55,9 +55,9 @@ export const useFullScan = () => {
     isLoading: isPolling,
     error: pollError,
     dataUpdatedAt
-  } = useQuery<FullScanStatusResponse, Error>({
-    queryKey: ['fullScan', scanId],
-    queryFn: () => api.getFullScanStatus(scanId!),
+  } = useQuery({
+    queryKey: ['fullScan', scanId] as const,
+    queryFn: async (): Promise<FullScanStatusResponse> => api.getFullScanStatus(scanId!),
     enabled: !!scanId && startScanMutation.isSuccess,
     refetchInterval: (query) => {
       // Stop polling if scan is complete or error
@@ -68,7 +68,7 @@ export const useFullScan = () => {
       return 2000; // Poll every 2 seconds
     },
     staleTime: 0, // Always consider stale for polling
-    cacheTime: 30 * 60 * 1000, // Keep in cache for 30 minutes
+    gcTime: 30 * 60 * 1000, // Keep in cache for 30 minutes (renamed from cacheTime in TanStack Query v5)
   });
 
   // Extract result from progress or cached data
@@ -127,7 +127,7 @@ export const useFullScan = () => {
     scanId,
     progress: progress || null,
     result,
-    isLoading: startScanMutation.isLoading || isPolling,
+    isLoading: startScanMutation.isPending || isPolling,
     error: startScanMutation.error || pollError || null,
     startScan,
     dataUpdatedAt, // For cache status indicators

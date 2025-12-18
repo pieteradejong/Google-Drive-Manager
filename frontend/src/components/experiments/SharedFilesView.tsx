@@ -10,7 +10,7 @@ interface SharedFilesViewProps {
   onFileClick?: (file: FileItem) => void;
 }
 
-export const SharedFilesView = ({ files, childrenMap, onFileClick }: SharedFilesViewProps) => {
+export const SharedFilesView = ({ files, onFileClick }: SharedFilesViewProps) => {
   // Find files with multiple parents (shared files)
   const sharedFiles = useMemo(() => {
     return files.filter(file => file.parents.length > 1);
@@ -31,11 +31,6 @@ export const SharedFilesView = ({ files, childrenMap, onFileClick }: SharedFiles
     return groups;
   }, [sharedFiles]);
   
-  // Get folder path for a file
-  const getFolderPath = (file: FileItem): string => {
-    if (file.parents.length === 0) return 'Root';
-    return `${file.parents.length} location${file.parents.length > 1 ? 's' : ''}`;
-  };
   
   // Get parent folder names (limited)
   const getParentNames = (file: FileItem, limit: number = 3): string[] => {

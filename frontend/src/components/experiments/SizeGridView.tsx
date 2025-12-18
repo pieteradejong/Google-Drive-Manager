@@ -24,8 +24,8 @@ const getSizeScale = (maxSize: number, currentSize: number): number => {
   return 0.3 + (currentSize / maxSize) * 0.7;
 };
 
-export const SizeGridView = ({ files, childrenMap, onFileClick }: SizeGridViewProps) => {
-  // Get all items with sizes
+export const SizeGridView = ({ files, onFileClick }: SizeGridViewProps) => {
+  // Get all items with sizes - extend FileItem with displaySize for sorting
   const itemsWithSizes = files
     .map(f => ({
       ...f,
@@ -34,7 +34,7 @@ export const SizeGridView = ({ files, childrenMap, onFileClick }: SizeGridViewPr
     .filter(f => f.displaySize > 0);
   
   const sortedItems = sortBySize(itemsWithSizes);
-  const maxSize = sortedItems[0]?.displaySize || 1;
+  const maxSize = (sortedItems[0] as typeof itemsWithSizes[number])?.displaySize || 1;
   
   // Show top 100 largest items to avoid overwhelming
   const topItems = sortedItems.slice(0, 100);
@@ -49,7 +49,8 @@ export const SizeGridView = ({ files, childrenMap, onFileClick }: SizeGridViewPr
       <div className="flex-1 overflow-auto">
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
           {topItems.map((item) => {
-            const scale = getSizeScale(maxSize, item.displaySize);
+            const itemWithSize = item as typeof itemsWithSizes[number];
+            const scale = getSizeScale(maxSize, itemWithSize.displaySize);
             const isFolder = item.mimeType === 'application/vnd.google-apps.folder';
             const colorClass = getTypeColor(item.mimeType);
             
@@ -80,7 +81,7 @@ export const SizeGridView = ({ files, childrenMap, onFileClick }: SizeGridViewPr
                   className="text-xs text-gray-600 mt-1"
                   style={{ fontSize: `${8 + scale * 2}px` }}
                 >
-                  {formatSize(item.displaySize)}
+                  {formatSize(itemWithSize.displaySize)}
                 </div>
               </div>
             );

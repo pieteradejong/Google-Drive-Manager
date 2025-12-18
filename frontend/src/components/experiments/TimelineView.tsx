@@ -1,7 +1,7 @@
 /** Timeline/Chronological View - Organized by modified date (Enhanced with activity patterns) */
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo } from 'react';
 import { format } from 'date-fns';
-import { File, Folder, Calendar } from 'lucide-react';
+import { File, Folder } from 'lucide-react';
 import { groupByDatePeriod, sortByDate, formatSize } from '../../utils/navigation';
 import { measureSync } from '../../utils/performance';
 import { LoadingState } from '../LoadingState';
@@ -13,7 +13,7 @@ interface TimelineViewProps {
   onFileClick?: (file: FileItem) => void;
 }
 
-export const TimelineView = ({ files, childrenMap, onFileClick }: TimelineViewProps) => {
+export const TimelineView = ({ files, onFileClick }: TimelineViewProps) => {
   const [period, setPeriod] = useState<'day' | 'week' | 'month'>('day');
   const [isProcessing, setIsProcessing] = useState(true);
   const [processProgress, setProcessProgress] = useState(0);

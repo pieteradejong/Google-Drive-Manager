@@ -14,7 +14,7 @@ interface PerformanceIndicatorProps {
 
 export const PerformanceIndicator = ({ 
   timing, 
-  operationName,
+  // operationName is kept for future use in tooltips/logging
   isRunning = false,
   className = ''
 }: PerformanceIndicatorProps) => {

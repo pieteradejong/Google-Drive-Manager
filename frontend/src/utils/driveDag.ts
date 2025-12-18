@@ -41,6 +41,35 @@ export interface DriveDag {
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
 
+export interface DagTraversalCaps {
+  /** Maximum unique nodes to visit before truncating. */
+  maxNodes?: number;
+  /** Maximum edges to include in returned subgraph before truncating. */
+  maxEdges?: number;
+  /** Optional depth limit for traversals (edges traversed). */
+  maxHops?: number;
+}
+
+export interface DagSubgraphResult {
+  nodeIds: Set<string>;
+  edges: DagEdge[];
+  truncated: boolean;
+  visitedNodes: number;
+  includedEdges: number;
+}
+
+export interface DagReachableResult {
+  reachable: Set<string>;
+  truncated: boolean;
+  visitedNodes: number;
+}
+
+export interface DagDescendantsResult {
+  descendantCount: number;
+  truncated: boolean;
+  visitedNodes: number;
+}
+
 export function buildDriveDag(files: FileItem[]): DriveDag {
   const fileById = new Map<string, FileItem>();
   for (const f of files) fileById.set(f.id, f);
@@ -200,4 +229,154 @@ export function buildDriveDag(files: FileItem[]): DriveDag {
     maxDepth,
     warnings,
   };
+}
+
+export function getNodeSizeBytes(file: FileItem): number {
+  return file.calculatedSize ?? file.size ?? 0;
+}
+
+export function getMultiParentIds(dag: DriveDag): string[] {
+  const ids: string[] = [];
+  for (const [id, parents] of dag.parentsById) {
+    if ((parents?.length || 0) > 1) ids.push(id);
+  }
+  return ids;
+}
+
+export function reachableFromRoots(
+  dag: DriveDag,
+  rootIds: string[],
+  caps: DagTraversalCaps = {}
+): DagReachableResult {
+  const maxNodes = caps.maxNodes ?? 50_000;
+  const maxHops = caps.maxHops ?? Infinity;
+
+  const reachable = new Set<string>();
+  const queue: Array<{ id: string; hops: number }> = [];
+
+  for (const r of rootIds) {
+    if (!dag.nodesById.has(r)) continue;
+    if (reachable.has(r)) continue;
+    reachable.add(r);
+    queue.push({ id: r, hops: 0 });
+    if (reachable.size >= maxNodes) {
+      return { reachable, truncated: true, visitedNodes: reachable.size };
+    }
+  }
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (cur.hops >= maxHops) continue;
+
+    const children = dag.childrenById.get(cur.id) || [];
+    for (const child of children) {
+      if (reachable.has(child)) continue;
+      reachable.add(child);
+      if (reachable.size >= maxNodes) {
+        return { reachable, truncated: true, visitedNodes: reachable.size };
+      }
+      queue.push({ id: child, hops: cur.hops + 1 });
+    }
+  }
+
+  return { reachable, truncated: false, visitedNodes: reachable.size };
+}
+
+/** Undirected, hop-limited neighborhood around a node, returning directed edges within the neighborhood. */
+export function getSubgraphAround(
+  dag: DriveDag,
+  centerId: string,
+  hops: number,
+  caps: DagTraversalCaps = {}
+): DagSubgraphResult {
+  const maxNodes = caps.maxNodes ?? 2_000;
+  const maxEdges = caps.maxEdges ?? 5_000;
+  const maxHops = Math.min(hops, caps.maxHops ?? hops);
+
+  const nodeIds = new Set<string>();
+  const queue: Array<{ id: string; hops: number }> = [];
+  let truncated = false;
+
+  if (!dag.nodesById.has(centerId)) {
+    return { nodeIds, edges: [], truncated: false, visitedNodes: 0, includedEdges: 0 };
+  }
+
+  nodeIds.add(centerId);
+  queue.push({ id: centerId, hops: 0 });
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (cur.hops >= maxHops) continue;
+
+    const neighbors = new Set<string>();
+    for (const p of dag.parentsById.get(cur.id) || []) neighbors.add(p);
+    for (const c of dag.childrenById.get(cur.id) || []) neighbors.add(c);
+
+    for (const n of neighbors) {
+      if (!dag.nodesById.has(n)) continue;
+      if (nodeIds.has(n)) continue;
+      nodeIds.add(n);
+      if (nodeIds.size >= maxNodes) {
+        truncated = true;
+        queue.length = 0;
+        break;
+      }
+      queue.push({ id: n, hops: cur.hops + 1 });
+    }
+  }
+
+  const edges: DagEdge[] = [];
+  for (const e of dag.edges) {
+    if (!nodeIds.has(e.from) || !nodeIds.has(e.to)) continue;
+    edges.push(e);
+    if (edges.length >= maxEdges) {
+      truncated = true;
+      break;
+    }
+  }
+
+  return {
+    nodeIds,
+    edges,
+    truncated,
+    visitedNodes: nodeIds.size,
+    includedEdges: edges.length,
+  };
+}
+
+/** Count descendants by capped BFS (directed) from startId. */
+export function countDescendants(
+  dag: DriveDag,
+  startId: string,
+  caps: DagTraversalCaps = {}
+): DagDescendantsResult {
+  const maxNodes = caps.maxNodes ?? 10_000;
+  const maxHops = caps.maxHops ?? Infinity;
+
+  if (!dag.nodesById.has(startId)) {
+    return { descendantCount: 0, truncated: false, visitedNodes: 0 };
+  }
+
+  const visited = new Set<string>();
+  const queue: Array<{ id: string; hops: number }> = [];
+
+  visited.add(startId);
+  queue.push({ id: startId, hops: 0 });
+
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    if (cur.hops >= maxHops) continue;
+
+    for (const child of dag.childrenById.get(cur.id) || []) {
+      if (visited.has(child)) continue;
+      visited.add(child);
+      if (visited.size >= maxNodes) {
+        // visited includes start node; descendants = visited-1
+        return { descendantCount: Math.max(0, visited.size - 1), truncated: true, visitedNodes: visited.size };
+      }
+      queue.push({ id: child, hops: cur.hops + 1 });
+    }
+  }
+
+  return { descendantCount: Math.max(0, visited.size - 1), truncated: false, visitedNodes: visited.size };
 }
