@@ -157,7 +157,12 @@ run_type_check() {
         source venv/bin/activate
         
         if command -v mypy &>/dev/null || python -m mypy --version &>/dev/null; then
-            python -m mypy backend/ --ignore-missing-imports || EXIT_CODE=1
+            # Use config file if it exists
+            if [ -f "backend/mypy.ini" ]; then
+                python -m mypy backend/ --config-file=backend/mypy.ini || EXIT_CODE=1
+            else
+                python -m mypy backend/ --ignore-missing-imports || EXIT_CODE=1
+            fi
         else
             echo -e "${YELLOW}mypy not installed. Skipping Python type checking${NC}"
         fi

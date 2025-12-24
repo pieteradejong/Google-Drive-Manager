@@ -13,7 +13,7 @@ interface FolderDepthAnalysisViewProps {
   onFileClick?: (file: FileItem) => void;
 }
 
-export const FolderDepthAnalysisView = ({ files, childrenMap, onFileClick }: FolderDepthAnalysisViewProps) => {
+export const FolderDepthAnalysisView = ({ files, childrenMap: _childrenMap, onFileClick }: FolderDepthAnalysisViewProps) => {
   const [isCalculating, setIsCalculating] = useState(true);
   const [calcProgress, setCalcProgress] = useState(0);
   
