@@ -1,4 +1,5 @@
 """Pydantic models for API requests and responses."""
+
 from typing import List, Dict, Optional, Any
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -6,21 +7,23 @@ from pydantic import BaseModel, Field
 
 class FileItem(BaseModel):
     """Model for a single file/folder item."""
+
     id: str
     name: str
     mimeType: str
     size: Optional[int] = None
-    calculatedSize: Optional[int] = Field(None, alias='calculatedSize')
+    calculatedSize: Optional[int] = Field(None, alias="calculatedSize")
     createdTime: Optional[str] = None
     modifiedTime: Optional[str] = None
     webViewLink: Optional[str] = None
     parents: List[str] = Field(default_factory=list)
-    
+
     model_config = {"populate_by_name": True}
 
 
 class DriveStats(BaseModel):
     """Statistics about the Drive."""
+
     total_files: int
     total_size: int
     folder_count: int
@@ -29,10 +32,11 @@ class DriveStats(BaseModel):
 
 class ScanResponse(BaseModel):
     """Response model for /api/scan endpoint."""
+
     files: List[FileItem]
     children_map: Dict[str, List[str]]
     stats: DriveStats
-    
+
     model_config = {
         "json_schema_extra": {
             "example": {
@@ -42,18 +46,16 @@ class ScanResponse(BaseModel):
                         "name": "My Folder",
                         "mimeType": "application/vnd.google-apps.folder",
                         "calculatedSize": 1024000,
-                        "parents": []
+                        "parents": [],
                     }
                 ],
-                "children_map": {
-                    "123": ["456", "789"]
-                },
+                "children_map": {"123": ["456", "789"]},
                 "stats": {
                     "total_files": 10,
                     "total_size": 1024000,
                     "folder_count": 2,
-                    "file_count": 8
-                }
+                    "file_count": 8,
+                },
             }
         }
     }
@@ -61,11 +63,13 @@ class ScanResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     """Response model for /api/health endpoint."""
+
     status: str = "ok"
 
 
 class QuickScanResponse(BaseModel):
     """Response model for /api/scan/quick endpoint."""
+
     overview: Dict[str, Any]  # Storage quota, user info from about.get
     top_folders: List[FileItem]  # Root-level folders only
     estimated_total_files: Optional[int] = None  # Estimate from first page if available
@@ -73,6 +77,7 @@ class QuickScanResponse(BaseModel):
 
 class ScanProgress(BaseModel):
     """Progress information for a full scan."""
+
     scan_id: str
     stage: str  # "fetching", "building_tree", "calculating_sizes", "complete", "error"
     progress: float  # 0-100
@@ -84,6 +89,7 @@ class ScanProgress(BaseModel):
 
 class FullScanStatusResponse(BaseModel):
     """Response model for /api/scan/full/status/{scan_id}."""
+
     scan_id: str
     status: str  # "running", "complete", "error"
     progress: ScanProgress
@@ -92,6 +98,7 @@ class FullScanStatusResponse(BaseModel):
 
 class AnalyticsStatusResponse(BaseModel):
     """Status for derived analytics computation/cache."""
+
     status: str  # "missing", "running", "ready", "error"
     message: Optional[str] = None
     source_cache_timestamp: Optional[str] = None
@@ -104,9 +111,9 @@ class AnalyticsStatusResponse(BaseModel):
 
 class AnalyticsViewResponse(BaseModel):
     """Response model for per-view analytics payload."""
+
     view: str
     source_cache_timestamp: str
     derived_version: int
     computed_at: str
     data: Dict[str, Any]
-

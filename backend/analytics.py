@@ -9,7 +9,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .cache import AnalyticsCacheMetadata
 
 
 # ---- Helpers
@@ -71,16 +74,76 @@ class _SemanticCategory:
 
 
 _SEMANTIC_CATEGORIES: Tuple[_SemanticCategory, ...] = (
-    _SemanticCategory("Backup/Archive", ("backup", "backup_", "old", "old_", "archive", "legacy", "bak", "oldbackup")),
-    _SemanticCategory("Photos", ("photo", "photos", "picture", "pictures", "images", "camera", "pic", "pics", "img")),
-    _SemanticCategory("Work", ("work", "business", "client", "project", "projects", "office", "corporate", "job")),
-    _SemanticCategory("Personal", ("personal", "home", "family", "private", "my", "self")),
-    _SemanticCategory("Documents", ("document", "doc", "documents", "files", "paperwork")),
-    _SemanticCategory("Music", ("music", "audio", "song", "songs", "mp3", "sound", "tunes")),
-    _SemanticCategory("Videos", ("video", "videos", "movie", "movies", "film", "films")),
+    _SemanticCategory(
+        "Backup/Archive",
+        ("backup", "backup_", "old", "old_", "archive", "legacy", "bak", "oldbackup"),
+    ),
+    _SemanticCategory(
+        "Photos",
+        (
+            "photo",
+            "photos",
+            "picture",
+            "pictures",
+            "images",
+            "camera",
+            "pic",
+            "pics",
+            "img",
+        ),
+    ),
+    _SemanticCategory(
+        "Work",
+        (
+            "work",
+            "business",
+            "client",
+            "project",
+            "projects",
+            "office",
+            "corporate",
+            "job",
+        ),
+    ),
+    _SemanticCategory(
+        "Personal", ("personal", "home", "family", "private", "my", "self")
+    ),
+    _SemanticCategory(
+        "Documents", ("document", "doc", "documents", "files", "paperwork")
+    ),
+    _SemanticCategory(
+        "Music", ("music", "audio", "song", "songs", "mp3", "sound", "tunes")
+    ),
+    _SemanticCategory(
+        "Videos", ("video", "videos", "movie", "movies", "film", "films")
+    ),
     _SemanticCategory("Downloads", ("download", "downloaded", "temp", "tmp")),
-    _SemanticCategory("Code", ("code", "dev", "development", "src", "source", "script", "scripts", "programming")),
-    _SemanticCategory("School", ("school", "education", "study", "studies", "course", "courses", "class", "university")),
+    _SemanticCategory(
+        "Code",
+        (
+            "code",
+            "dev",
+            "development",
+            "src",
+            "source",
+            "script",
+            "scripts",
+            "programming",
+        ),
+    ),
+    _SemanticCategory(
+        "School",
+        (
+            "school",
+            "education",
+            "study",
+            "studies",
+            "course",
+            "courses",
+            "class",
+            "university",
+        ),
+    ),
 )
 
 
@@ -206,7 +269,9 @@ def compute_duplicates(files: List[Dict[str, Any]]) -> Dict[str, Any]:
     return {"groups": out_groups, "total_potential_savings": total_potential_savings}
 
 
-def compute_orphans(files: List[Dict[str, Any]], file_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def compute_orphans(
+    files: List[Dict[str, Any]], file_by_id: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
     """Find files with missing parent references."""
     orphans: List[Dict[str, Any]] = []
     for f in files:
@@ -219,7 +284,9 @@ def compute_orphans(files: List[Dict[str, Any]], file_by_id: Dict[str, Dict[str,
     return {"orphans": orphans, "count": len(orphans)}
 
 
-def compute_depths(files: List[Dict[str, Any]], file_by_id: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+def compute_depths(
+    files: List[Dict[str, Any]], file_by_id: Dict[str, Dict[str, Any]]
+) -> Dict[str, Any]:
     """Compute folder depth (max parent depth + 1), with cycle protection."""
     depth_by_id: Dict[str, int] = {}
     visiting: set[str] = set()
@@ -282,10 +349,14 @@ def compute_semantic(
     """Compute semantic category per folder + totals."""
     now = datetime.now().astimezone()
     folder_category: Dict[str, Dict[str, Any]] = {}
-    category_folder_ids: Dict[str, List[str]] = {cat.name: [] for cat in _SEMANTIC_CATEGORIES}
+    category_folder_ids: Dict[str, List[str]] = {
+        cat.name: [] for cat in _SEMANTIC_CATEGORIES
+    }
     uncategorized_folder_ids: List[str] = []
 
-    totals: Dict[str, Dict[str, Any]] = {cat.name: {"folder_count": 0, "total_size": 0} for cat in _SEMANTIC_CATEGORIES}
+    totals: Dict[str, Dict[str, Any]] = {
+        cat.name: {"folder_count": 0, "total_size": 0} for cat in _SEMANTIC_CATEGORIES
+    }
     uncategorized_count = 0
 
     for f in files:
@@ -311,7 +382,11 @@ def compute_semantic(
                 method = "content"
 
         if cat_name:
-            folder_category[fid] = {"category": cat_name, "confidence": confidence, "method": method}
+            folder_category[fid] = {
+                "category": cat_name,
+                "confidence": confidence,
+                "method": method,
+            }
             totals[cat_name]["folder_count"] += 1
             totals[cat_name]["total_size"] += _file_size(f)
             category_folder_ids[cat_name].append(fid)
@@ -321,7 +396,9 @@ def compute_semantic(
 
     # Only keep non-empty totals for frontend lists
     totals_non_empty = {k: v for k, v in totals.items() if v["folder_count"] > 0}
-    category_folder_ids_non_empty = {k: v for k, v in category_folder_ids.items() if len(v) > 0}
+    category_folder_ids_non_empty = {
+        k: v for k, v in category_folder_ids.items() if len(v) > 0
+    }
     return {
         "folder_category": folder_category,
         "totals": totals_non_empty,
@@ -364,7 +441,9 @@ def compute_age_semantic(
                 break
 
         matrix.setdefault(cat, {})
-        cell = matrix[cat].setdefault(bucket_label, {"folder_count": 0, "total_size": 0})
+        cell = matrix[cat].setdefault(
+            bucket_label, {"folder_count": 0, "total_size": 0}
+        )
         cell["folder_count"] += 1
         cell["total_size"] += _file_size(f)
 
@@ -408,11 +487,16 @@ def compute_type_semantic(
             cat = folder_category[parent].get("category") or "Uncategorized"
 
         group = _file_type_group(f.get("mimeType") or "")
-        cell = matrix.setdefault(cat, {}).setdefault(group, {"file_count": 0, "total_size": 0})
+        cell = matrix.setdefault(cat, {}).setdefault(
+            group, {"file_count": 0, "total_size": 0}
+        )
         cell["file_count"] += 1
         cell["total_size"] += _file_size(f)
 
-    return {"groups": ["Images", "Videos", "Audio", "Documents", "Other"], "matrix": matrix}
+    return {
+        "groups": ["Images", "Videos", "Audio", "Documents", "Other"],
+        "matrix": matrix,
+    }
 
 
 def compute_type_stats(files: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -492,7 +576,11 @@ def compute_timeline(files: List[Dict[str, Any]]) -> Dict[str, Any]:
 
     return {
         "created": {"day": created_day, "week": created_week, "month": created_month},
-        "modified": {"day": modified_day, "week": modified_week, "month": modified_month},
+        "modified": {
+            "day": modified_day,
+            "week": modified_week,
+            "month": modified_month,
+        },
     }
 
 
@@ -532,7 +620,9 @@ def compute_all_analytics(scan_data: Dict[str, Any]) -> Dict[str, Any]:
     semantic = compute_semantic(files, children_map, file_by_id)
     folders_only = [f for f in files if _is_folder(f)]
     now = datetime.now().astimezone()
-    age_semantic = compute_age_semantic(folders_only, semantic.get("folder_category") or {}, now)
+    age_semantic = compute_age_semantic(
+        folders_only, semantic.get("folder_category") or {}, now
+    )
     type_semantic = compute_type_semantic(files, semantic.get("folder_category") or {})
     orphans = compute_orphans(files, file_by_id)
     types = compute_type_stats(files)
@@ -553,7 +643,9 @@ def compute_all_analytics(scan_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def compute_full_scan_analytics_cache(full_scan_cache: Dict[str, Any]) -> Tuple[Dict[str, Any], "AnalyticsCacheMetadata"]:
+def compute_full_scan_analytics_cache(
+    full_scan_cache: Dict[str, Any],
+) -> Tuple[Dict[str, Any], "AnalyticsCacheMetadata"]:
     """
     Compute analytics bundle + metadata from a full_scan cache payload (as returned by load_cache('full_scan')).
     """
@@ -590,4 +682,3 @@ def save_full_scan_analytics_cache(full_scan_cache: Dict[str, Any]) -> bool:
 
     bundle, meta = compute_full_scan_analytics_cache(full_scan_cache)
     return save_cache("full_scan_analytics", bundle, meta)  # type: ignore[arg-type]
-

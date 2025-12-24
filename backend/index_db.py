@@ -6,6 +6,7 @@ in a normalized SQLite database with support for:
 - Parent-child relationships (edges) for DAG traversal
 - Sync state management for incremental updates via Changes API
 """
+
 import json
 import sqlite3
 from contextlib import contextmanager
@@ -50,15 +51,16 @@ def get_connection(db_path: Optional[Path] = None) -> Iterator[sqlite3.Connectio
 def init_db(db_path: Optional[Path] = None) -> None:
     """
     Initialize the database schema.
-    
+
     Creates tables and indexes if they don't exist.
     Safe to call multiple times (idempotent).
     """
     with get_connection(db_path) as conn:
         cursor = conn.cursor()
-        
+
         # Files table with normalized columns + raw_json
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS files (
                 id TEXT PRIMARY KEY,
                 name TEXT,
@@ -80,27 +82,33 @@ def init_db(db_path: Optional[Path] = None) -> None:
                 raw_json TEXT NOT NULL,
                 removed INTEGER NOT NULL DEFAULT 0
             )
-        """)
-        
+        """
+        )
+
         # Parents adjacency table for containment edges
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS parents (
                 parent_id TEXT NOT NULL,
                 child_id TEXT NOT NULL,
                 PRIMARY KEY(parent_id, child_id)
             )
-        """)
-        
+        """
+        )
+
         # Sync state table for tokens and metadata
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS sync_state (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             )
-        """)
-        
+        """
+        )
+
         # Optional: file_errors table for debugging
-        cursor.execute("""
+        cursor.execute(
+            """
             CREATE TABLE IF NOT EXISTS file_errors (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_id TEXT,
@@ -108,33 +116,44 @@ def init_db(db_path: Optional[Path] = None) -> None:
                 error TEXT,
                 created_time TEXT
             )
-        """)
-        
+        """
+        )
+
         # Create indexes for common queries
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_md5_size ON files(md5, size)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_files_md5_size ON files(md5, size)"
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_mime ON files(mime_type)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified_time)")
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified_time)"
+        )
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_trashed ON files(trashed)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_files_removed ON files(removed)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_parents_parent ON parents(parent_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_parents_child ON parents(child_id)")
-        
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_parents_parent ON parents(parent_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_parents_child ON parents(child_id)"
+        )
+
         # Store schema version
         cursor.execute(
             "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
-            ("schema_version", str(SCHEMA_VERSION))
+            ("schema_version", str(SCHEMA_VERSION)),
         )
-        
+
         conn.commit()
-        db_logger.info("init_db", message="Database initialized", schema_version=SCHEMA_VERSION)
+        db_logger.info(
+            "init_db", message="Database initialized", schema_version=SCHEMA_VERSION
+        )
 
 
 def upsert_file(conn: sqlite3.Connection, file_dict: Dict[str, Any]) -> None:
     """
     Insert or update a file record from Drive API response.
-    
+
     Maps Drive API fields to normalized columns and stores raw JSON.
-    
+
     Args:
         conn: Database connection
         file_dict: File object from Drive API response
@@ -142,28 +161,29 @@ def upsert_file(conn: sqlite3.Connection, file_dict: Dict[str, Any]) -> None:
     file_id = file_dict.get("id")
     if not file_id:
         return
-    
+
     # Determine if this is a shortcut
     mime_type = file_dict.get("mimeType", "")
     is_shortcut = 1 if mime_type == "application/vnd.google-apps.shortcut" else 0
-    
+
     # Extract shortcut details if present
     shortcut_details = file_dict.get("shortcutDetails") or {}
     shortcut_target_id = shortcut_details.get("targetId")
     shortcut_target_mime = shortcut_details.get("targetMimeType")
-    
+
     # Serialize complex fields
     owners = file_dict.get("owners")
     owners_json = json.dumps(owners) if owners else None
-    
+
     capabilities = file_dict.get("capabilities")
     capabilities_json = json.dumps(capabilities) if capabilities else None
-    
+
     # Store the full raw JSON
     raw_json = json.dumps(file_dict)
-    
+
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(
+        """
         INSERT INTO files (
             id, name, mime_type, trashed, created_time, modified_time,
             size, md5, owned_by_me, owners_json, capabilities_json,
@@ -189,60 +209,64 @@ def upsert_file(conn: sqlite3.Connection, file_dict: Dict[str, Any]) -> None:
             icon_link = excluded.icon_link,
             raw_json = excluded.raw_json,
             removed = 0
-    """, (
-        file_id,
-        file_dict.get("name"),
-        mime_type,
-        1 if file_dict.get("trashed") else 0,
-        file_dict.get("createdTime"),
-        file_dict.get("modifiedTime"),
-        int(file_dict.get("size")) if file_dict.get("size") else None,
-        file_dict.get("md5Checksum"),
-        1 if file_dict.get("ownedByMe") else 0,
-        owners_json,
-        capabilities_json,
-        is_shortcut,
-        shortcut_target_id,
-        shortcut_target_mime,
-        1 if file_dict.get("starred") else 0,
-        file_dict.get("webViewLink"),
-        file_dict.get("iconLink"),
-        raw_json,
-    ))
+    """,
+        (
+            file_id,
+            file_dict.get("name"),
+            mime_type,
+            1 if file_dict.get("trashed") else 0,
+            file_dict.get("createdTime"),
+            file_dict.get("modifiedTime"),
+            int(file_dict.get("size")) if file_dict.get("size") else None,
+            file_dict.get("md5Checksum"),
+            1 if file_dict.get("ownedByMe") else 0,
+            owners_json,
+            capabilities_json,
+            is_shortcut,
+            shortcut_target_id,
+            shortcut_target_mime,
+            1 if file_dict.get("starred") else 0,
+            file_dict.get("webViewLink"),
+            file_dict.get("iconLink"),
+            raw_json,
+        ),
+    )
 
 
-def replace_parents(conn: sqlite3.Connection, child_id: str, parent_ids: List[str]) -> None:
+def replace_parents(
+    conn: sqlite3.Connection, child_id: str, parent_ids: List[str]
+) -> None:
     """
     Replace all parent edges for a file.
-    
+
     This handles file moves - when a file's parents change, we delete
     all existing edges and insert the new ones.
-    
+
     Args:
         conn: Database connection
         child_id: The file ID whose parents are being updated
         parent_ids: List of new parent folder IDs
     """
     cursor = conn.cursor()
-    
+
     # Delete existing edges for this child
     cursor.execute("DELETE FROM parents WHERE child_id = ?", (child_id,))
-    
+
     # Insert new edges
     for parent_id in parent_ids:
         cursor.execute(
             "INSERT OR IGNORE INTO parents (parent_id, child_id) VALUES (?, ?)",
-            (parent_id, child_id)
+            (parent_id, child_id),
         )
 
 
 def mark_file_removed(conn: sqlite3.Connection, file_id: str) -> None:
     """
     Mark a file as removed (from Changes API 'removed' flag).
-    
+
     This preserves the file record for history but marks it as no longer accessible.
     Also removes all parent edges.
-    
+
     Args:
         conn: Database connection
         file_id: The file ID to mark as removed
@@ -264,22 +288,18 @@ def set_sync_state(conn: sqlite3.Connection, key: str, value: str) -> None:
     """Set a value in sync_state table."""
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)",
-        (key, value)
+        "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?, ?)", (key, value)
     )
 
 
 def log_file_error(
-    conn: sqlite3.Connection,
-    file_id: Optional[str],
-    stage: str,
-    error: str
+    conn: sqlite3.Connection, file_id: Optional[str], stage: str, error: str
 ) -> None:
     """Log a processing error for debugging."""
     cursor = conn.cursor()
     cursor.execute(
         "INSERT INTO file_errors (file_id, stage, error, created_time) VALUES (?, ?, ?, ?)",
-        (file_id, stage, error, datetime.now(timezone.utc).isoformat())
+        (file_id, stage, error, datetime.now(timezone.utc).isoformat()),
     )
 
 
@@ -294,29 +314,29 @@ def get_file_by_id(conn: sqlite3.Connection, file_id: str) -> Optional[Dict[str,
 def get_all_files(
     conn: sqlite3.Connection,
     include_trashed: bool = False,
-    include_removed: bool = False
+    include_removed: bool = False,
 ) -> List[Dict[str, Any]]:
     """
     Get all files from the database.
-    
+
     Args:
         conn: Database connection
         include_trashed: Whether to include trashed files
         include_removed: Whether to include removed files
-        
+
     Returns:
         List of file dictionaries
     """
     cursor = conn.cursor()
-    
+
     conditions = []
     if not include_removed:
         conditions.append("removed = 0")
     if not include_trashed:
         conditions.append("trashed = 0")
-    
+
     where_clause = " AND ".join(conditions) if conditions else "1=1"
-    
+
     cursor.execute(f"SELECT * FROM files WHERE {where_clause}")
     return [dict(row) for row in cursor.fetchall()]
 
@@ -341,7 +361,9 @@ def get_file_count(conn: sqlite3.Connection, include_trashed: bool = False) -> i
     if include_trashed:
         cursor.execute("SELECT COUNT(*) as count FROM files WHERE removed = 0")
     else:
-        cursor.execute("SELECT COUNT(*) as count FROM files WHERE removed = 0 AND trashed = 0")
+        cursor.execute(
+            "SELECT COUNT(*) as count FROM files WHERE removed = 0 AND trashed = 0"
+        )
     return cursor.fetchone()["count"]
 
 
@@ -363,7 +385,7 @@ def database_exists(db_path: Optional[Path] = None) -> bool:
     path = db_path or get_db_path()
     if not path.exists():
         return False
-    
+
     try:
         with get_connection(db_path) as conn:
             cursor = conn.cursor()
