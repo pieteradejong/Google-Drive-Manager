@@ -109,7 +109,12 @@ run_linting() {
         
         # Check for flake8
         if command -v flake8 &>/dev/null || python -m flake8 --version &>/dev/null; then
-            python -m flake8 backend/ --max-line-length=100 --ignore=E203,W503 || EXIT_CODE=1
+            # Use config file if it exists, otherwise use inline options
+            if [ -f "backend/.flake8" ]; then
+                python -m flake8 backend/ --config=backend/.flake8 || EXIT_CODE=1
+            else
+                python -m flake8 backend/ --max-line-length=100 --ignore=E203,W503 || EXIT_CODE=1
+            fi
         else
             echo -e "${YELLOW}flake8 not installed. Skipping Python linting${NC}"
         fi

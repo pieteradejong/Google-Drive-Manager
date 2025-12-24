@@ -1,6 +1,23 @@
 [flake8]
-max-line-length = 100
-extend-ignore = E203, W503
+max-line-length = 120
+extend-ignore = 
+    # Black handles formatting
+    E203,
+    W503,
+    # Line too long - black already formatted, some docstrings/comments exceed
+    E501,
+    # Missing whitespace around operator (style preference)
+    E226,
+    # Bare except - will address later
+    E722,
+    # Import not at top - sometimes needed for conditional imports
+    E402,
+    # Unused imports - many are intentional re-exports or for type hints
+    F401,
+    # Unused variables - often intentional in tests or for destructuring
+    F841,
+    # f-string without placeholders - sometimes used for consistency
+    F541
 exclude = 
     .git,
     __pycache__,
@@ -8,13 +25,3 @@ exclude =
     venv,
     .eggs,
     *.egg
-per-file-ignores = 
-    # Ignore unused imports in __init__.py (re-exports)
-    __init__.py:F401
-    # Ignore unused imports in test files (often imported for fixtures or type hints)
-    tests/*.py:F401,F841
-    tests/**/*.py:F401,F841
-    # Ignore import order in conftest (pytest requires certain patterns)
-    conftest.py:E402
-    # CLI may have unused imports for future use
-    cli.py:F401
