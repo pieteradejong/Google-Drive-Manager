@@ -12,7 +12,9 @@ This document captures key learnings, patterns, and best practices discovered wh
 4. [SQLite Indexer](#sqlite-indexer)
 5. [Google Drive API](#google-drive-api)
 6. [Linting & Formatting](#linting--formatting)
-7. [Common Pitfalls](#common-pitfalls)
+7. [Type Checking](#type-checking)
+8. [Common Errors & Fixes](#common-errors--fixes)
+9. [Common Pitfalls](#common-pitfalls)
 
 ---
 
@@ -376,6 +378,212 @@ Black and flake8 can conflict. Ignore these flake8 rules when using black:
 - `E203` - Whitespace before ':'
 - `W503` - Line break before binary operator
 - `E501` - Line too long (set higher limit or ignore)
+
+### Shell Script Configuration
+
+Update `test.sh` to use config files:
+
+```bash
+# Flake8 with config
+if [ -f "backend/.flake8" ]; then
+    python -m flake8 backend/ --config=backend/.flake8 || EXIT_CODE=1
+else
+    python -m flake8 backend/ --max-line-length=100 --ignore=E203,W503 || EXIT_CODE=1
+fi
+
+# Mypy with config
+if [ -f "backend/mypy.ini" ]; then
+    python -m mypy backend/ --config-file=backend/mypy.ini || EXIT_CODE=1
+else
+    python -m mypy backend/ --ignore-missing-imports || EXIT_CODE=1
+fi
+```
+
+---
+
+## Type Checking
+
+### Mypy Configuration
+
+Create `backend/mypy.ini` to configure Python type checking:
+
+```ini
+[mypy]
+python_version = 3.11
+ignore_missing_imports = True
+
+# Fix "Source file found twice" error
+mypy_path = .
+explicit_package_bases = True
+namespace_packages = True
+
+# Lenient settings (can tighten incrementally)
+warn_return_any = False
+check_untyped_defs = False
+
+# Disable common errors that require significant refactoring
+disable_error_code = arg-type, return-value, no-any-return, var-annotated, assignment, misc
+
+# Exclude test files from strict checking
+[mypy-backend.tests.*]
+ignore_errors = True
+```
+
+### TypeScript Unused Variables
+
+Prefix unused variables with `_` to indicate intentional non-use:
+
+```typescript
+// Error: 'childrenMap' is declared but its value is never read
+export const Component = ({ files, childrenMap, onClick }) => { ... }
+
+// Fix: Prefix with underscore
+export const Component = ({ files, childrenMap: _childrenMap, onClick }) => { ... }
+```
+
+---
+
+## Common Errors & Fixes
+
+### Error: "Source file found twice under different module names"
+
+**Symptom:**
+```
+backend/index_db.py: error: Source file found twice under different module names: "index_db" and "backend.index_db"
+```
+
+**Cause:** Mypy finds the same file through multiple import paths.
+
+**Fix:** Add to `mypy.ini`:
+```ini
+mypy_path = .
+explicit_package_bases = True
+namespace_packages = True
+```
+
+---
+
+### Error: Flake8 not using config file
+
+**Symptom:** Flake8 reports errors that should be ignored by `.flake8` config.
+
+**Cause:** Running flake8 with inline options instead of config file.
+
+**Fix:** Use `--config` flag:
+```bash
+# Wrong
+python -m flake8 backend/ --max-line-length=100
+
+# Right
+python -m flake8 backend/ --config=backend/.flake8
+```
+
+---
+
+### Error: Unused imports (F401)
+
+**Symptom:**
+```
+backend/cache.py:4:1: F401 'os' imported but unused
+```
+
+**Options:**
+
+1. **Remove the import** (if truly unused)
+2. **Add to flake8 ignore** (if intentional re-export)
+   ```ini
+   extend-ignore = F401
+   ```
+3. **Use `__all__`** to indicate intentional exports
+   ```python
+   __all__ = ['function1', 'function2']
+   ```
+
+---
+
+### Error: Line too long (E501)
+
+**Symptom:**
+```
+backend/main.py:216:101: E501 line too long (199 > 100 characters)
+```
+
+**Options:**
+
+1. **Break the line** (preferred for code)
+2. **Increase max-line-length** in config
+3. **Ignore E501** (if black already handles formatting)
+   ```ini
+   extend-ignore = E501
+   ```
+
+---
+
+### Error: f-string without placeholders (F541)
+
+**Symptom:**
+```
+backend/auth.py:117:21: F541 f-string is missing placeholders
+```
+
+**Fix:** Remove the `f` prefix or add placeholders:
+```python
+# Wrong
+message = f"Static string without variables"
+
+# Right
+message = "Static string without variables"
+# Or
+message = f"String with {variable}"
+```
+
+---
+
+### Error: TypeScript unused variable
+
+**Symptom:**
+```
+error TS6133: 'childrenMap' is declared but its value is never read.
+```
+
+**Fix:** Prefix with underscore to indicate intentional non-use:
+```typescript
+// Before
+const { files, childrenMap, onClick } = props;
+
+// After
+const { files, childrenMap: _childrenMap, onClick } = props;
+```
+
+---
+
+### Error: Bare except clause (E722)
+
+**Symptom:**
+```
+backend/cache.py:142:9: E722 do not use bare 'except'
+```
+
+**Fix:** Specify the exception type:
+```python
+# Wrong
+try:
+    risky_operation()
+except:
+    pass
+
+# Right
+try:
+    risky_operation()
+except Exception:
+    pass
+
+# Better
+try:
+    risky_operation()
+except (ValueError, TypeError) as e:
+    logger.error(f"Error: {e}")
+```
 
 ---
 
