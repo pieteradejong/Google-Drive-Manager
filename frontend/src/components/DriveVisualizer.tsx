@@ -106,16 +106,8 @@ export const DriveVisualizer = () => {
   // Kick off backend derived analytics computation once full scan data is available
   useEnsureAnalyticsStarted(Boolean(fullResult));
   
-  // Try to load cached full scan on mount
-  useEffect(() => {
-    if (!fullResult && !fullLoading) {
-      // Try to start a scan - if backend has valid cache, it returns immediately
-      startFullScan().catch(() => {
-        // Ignore errors - just means no cache available
-      });
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Only run on mount - intentionally ignoring deps
+  // Note: Cached data now loads automatically via useFullScan hook's useQuery
+  // No need to manually trigger startFullScan on mount
 
   // Update display data when we have results (including cached data on load)
   useEffect(() => {

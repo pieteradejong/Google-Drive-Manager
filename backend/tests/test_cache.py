@@ -278,16 +278,14 @@ class TestCacheManagement:
         assert not full_cache.exists()
         assert not full_meta.exists()
     
-    @patch('backend.cache.load_cache')
-    def test_get_cache_metadata_success(self, mock_load_cache):
+    @patch('backend.cache.load_cache_metadata')
+    def test_get_cache_metadata_success(self, mock_load_cache_metadata):
         """Test getting cache metadata."""
-        mock_load_cache.return_value = {
-            'metadata': {
-                'timestamp': '2024-01-15T10:30:00Z',
-                'file_count': 100,
-                'cache_version': 1
-            }
-        }
+        mock_load_cache_metadata.return_value = CacheMetadata(
+            timestamp='2024-01-15T10:30:00Z',
+            file_count=100,
+            cache_version=1
+        )
         
         metadata = get_cache_metadata('quick_scan')
         
@@ -295,10 +293,10 @@ class TestCacheManagement:
         assert metadata.timestamp == '2024-01-15T10:30:00Z'
         assert metadata.file_count == 100
     
-    @patch('backend.cache.load_cache')
-    def test_get_cache_metadata_not_found(self, mock_load_cache):
+    @patch('backend.cache.load_cache_metadata')
+    def test_get_cache_metadata_not_found(self, mock_load_cache_metadata):
         """Test getting metadata when cache doesn't exist."""
-        mock_load_cache.return_value = None
+        mock_load_cache_metadata.return_value = None
         
         metadata = get_cache_metadata('quick_scan')
         

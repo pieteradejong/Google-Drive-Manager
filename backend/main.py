@@ -629,6 +629,50 @@ async def invalidate_cache(scan_type: Optional[str] = None) -> Dict[str, str]:
         )
 
 
+@app.get("/api/scan/full/cached", response_model=ScanResponse)
+async def get_cached_full_scan() -> ScanResponse:
+    """
+    Get cached full scan data if available and valid.
+    
+    This endpoint returns cached data immediately without starting a scan.
+    Use this for instant page load when cache exists.
+    
+    Returns:
+        ScanResponse with cached files, children_map, and stats
+        
+    Raises:
+        404: No valid cache available
+    """
+    try:
+        cache_data = load_cache('full_scan')
+        if not cache_data:
+            raise HTTPException(status_code=404, detail="No cached data available")
+        
+        metadata = CacheMetadata(**cache_data['metadata'])
+        service = get_service()
+        
+        # Validate cache using same logic as start_full_scan
+        if not validate_cache_with_drive(service, metadata, max_age_seconds=2592000):  # 30 days
+            raise HTTPException(status_code=404, detail="Cache expired or invalid")
+        
+        # Kick off analytics compute if needed (background)
+        try:
+            start_analytics_compute_if_needed()
+        except Exception:
+            pass
+        
+        return ScanResponse(**cache_data['data'])
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        perf_logger.error(
+            "get_cached_full_scan",
+            message=f"Error loading cache: {str(e)}"
+        )
+        raise HTTPException(status_code=404, detail="Cache unavailable")
+
+
 @app.get("/api/scan/full/status/{scan_id}", response_model=FullScanStatusResponse)
 async def get_scan_status(scan_id: str) -> FullScanStatusResponse:
     """
@@ -1002,3 +1046,342 @@ async def analytics_view(
         )
 
     raise HTTPException(status_code=404, detail=f"Unknown analytics view '{view}'")
+
+
+# =============================================================================
+# SQLite Index Endpoints (New architecture per SPECIFICATION.md)
+# =============================================================================
+
+# In-memory state for SQLite crawl/sync operations
+_sqlite_scan_states: Dict[str, Dict[str, Any]] = {}
+
+
+@app.get("/api/index/status")
+async def get_index_status() -> Dict[str, Any]:
+    """
+    Get the status of the SQLite index.
+    
+    Returns:
+        Dict with index status, last crawl time, file count, etc.
+    """
+    from .index_db import database_exists, get_connection, get_db_path, get_sync_state, get_file_count
+    from .crawl_full import needs_full_crawl, get_last_crawl_info
+    from .sync_changes import can_sync
+    
+    try:
+        db_path = get_db_path()
+        
+        if not database_exists(db_path):
+            return {
+                "status": "not_initialized",
+                "message": "SQLite index not created. Run a full crawl first.",
+                "can_crawl": True,
+                "can_sync": False,
+            }
+        
+        crawl_info = get_last_crawl_info(db_path)
+        
+        if not crawl_info:
+            return {
+                "status": "empty",
+                "message": "Database exists but no crawl completed.",
+                "can_crawl": True,
+                "can_sync": False,
+            }
+        
+        with get_connection(db_path) as conn:
+            file_count = get_file_count(conn)
+        
+        return {
+            "status": "ready",
+            "message": "SQLite index is ready",
+            "last_full_crawl_time": crawl_info.get("last_full_crawl_time"),
+            "last_sync_time": crawl_info.get("last_sync_time"),
+            "file_count": file_count,
+            "can_crawl": True,
+            "can_sync": can_sync(db_path),
+            "db_path": str(db_path),
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+            "can_crawl": True,
+            "can_sync": False,
+        }
+
+
+@app.post("/api/index/crawl/start")
+async def start_index_crawl(force: bool = False) -> Dict[str, str]:
+    """
+    Start a full crawl to build/rebuild the SQLite index.
+    
+    Args:
+        force: If True, forces a full crawl even if sync is available
+        
+    Returns:
+        Dict with scan_id to poll for status
+    """
+    from .crawl_full import run_full_crawl, CrawlProgress
+    from .sync_changes import smart_sync
+    
+    scan_id = str(uuid.uuid4())
+    
+    # Initialize state
+    _sqlite_scan_states[scan_id] = {
+        "status": "starting",
+        "type": "crawl",
+        "progress": None,
+        "result": None,
+    }
+    
+    def run_crawl():
+        try:
+            service = get_service()
+            
+            def progress_callback(progress: CrawlProgress):
+                _sqlite_scan_states[scan_id]["progress"] = progress.to_dict()
+                _sqlite_scan_states[scan_id]["status"] = progress.stage
+            
+            if force:
+                progress = run_full_crawl(service, progress_callback=progress_callback)
+                _sqlite_scan_states[scan_id]["type"] = "full_crawl"
+            else:
+                result = smart_sync(service, progress_callback=progress_callback, force_full_crawl=force)
+                _sqlite_scan_states[scan_id]["type"] = result["type"]
+                progress = result["progress"]
+            
+            _sqlite_scan_states[scan_id]["status"] = "complete"
+            _sqlite_scan_states[scan_id]["result"] = progress if isinstance(progress, dict) else progress.to_dict()
+            
+        except Exception as e:
+            import traceback
+            _sqlite_scan_states[scan_id]["status"] = "error"
+            _sqlite_scan_states[scan_id]["error"] = str(e)
+            perf_logger.error("index_crawl", message=str(e))
+            traceback.print_exc()
+    
+    thread = Thread(target=run_crawl, daemon=True)
+    thread.start()
+    
+    return {"scan_id": scan_id}
+
+
+@app.post("/api/index/sync/start")
+async def start_index_sync() -> Dict[str, str]:
+    """
+    Start an incremental sync of the SQLite index.
+    
+    Uses the Changes API to fetch only what changed since last sync.
+    Much faster than a full crawl.
+    
+    Returns:
+        Dict with scan_id to poll for status
+        
+    Raises:
+        400: If no previous crawl exists (need full crawl first)
+    """
+    from .sync_changes import run_sync, can_sync, SyncProgress
+    from .index_db import get_db_path
+    
+    db_path = get_db_path()
+    
+    if not can_sync(db_path):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot sync: no previous crawl found. Run /api/index/crawl/start first."
+        )
+    
+    scan_id = str(uuid.uuid4())
+    
+    # Initialize state
+    _sqlite_scan_states[scan_id] = {
+        "status": "starting",
+        "type": "sync",
+        "progress": None,
+        "result": None,
+    }
+    
+    def run_sync_task():
+        try:
+            service = get_service()
+            
+            def progress_callback(progress: SyncProgress):
+                _sqlite_scan_states[scan_id]["progress"] = progress.to_dict()
+                _sqlite_scan_states[scan_id]["status"] = progress.stage
+            
+            progress = run_sync(service, progress_callback=progress_callback)
+            
+            _sqlite_scan_states[scan_id]["status"] = "complete"
+            _sqlite_scan_states[scan_id]["result"] = progress.to_dict()
+            
+        except Exception as e:
+            import traceback
+            _sqlite_scan_states[scan_id]["status"] = "error"
+            _sqlite_scan_states[scan_id]["error"] = str(e)
+            perf_logger.error("index_sync", message=str(e))
+            traceback.print_exc()
+    
+    thread = Thread(target=run_sync_task, daemon=True)
+    thread.start()
+    
+    return {"scan_id": scan_id}
+
+
+@app.get("/api/index/scan/status/{scan_id}")
+async def get_index_scan_status(scan_id: str) -> Dict[str, Any]:
+    """
+    Get the status of a crawl or sync operation.
+    
+    Args:
+        scan_id: The scan ID from crawl/start or sync/start
+        
+    Returns:
+        Status and progress information
+    """
+    if scan_id not in _sqlite_scan_states:
+        raise HTTPException(status_code=404, detail="Scan ID not found")
+    
+    state = _sqlite_scan_states[scan_id]
+    return {
+        "scan_id": scan_id,
+        "status": state["status"],
+        "type": state.get("type"),
+        "progress": state.get("progress"),
+        "result": state.get("result"),
+        "error": state.get("error"),
+    }
+
+
+@app.get("/api/index/data", response_model=ScanResponse)
+async def get_index_data() -> ScanResponse:
+    """
+    Get scan data from the SQLite index.
+    
+    This returns the same ScanResponse format as the legacy JSON cache,
+    but reads from SQLite for consistency with the new architecture.
+    
+    Returns:
+        ScanResponse with files, children_map, and stats
+        
+    Raises:
+        404: If no index data available
+    """
+    from .queries import build_scan_response_data
+    from .index_db import database_exists, get_db_path
+    
+    db_path = get_db_path()
+    
+    if not database_exists(db_path):
+        raise HTTPException(status_code=404, detail="No index data available. Run a crawl first.")
+    
+    try:
+        data = build_scan_response_data(db_path)
+        
+        # Convert to response models
+        file_items = [FileItem(**f) for f in data["files"]]
+        stats = DriveStats(**data["stats"])
+        
+        return ScanResponse(
+            files=file_items,
+            children_map=data["children_map"],
+            stats=stats
+        )
+        
+    except Exception as e:
+        perf_logger.error("get_index_data", message=str(e))
+        raise HTTPException(status_code=500, detail=f"Error reading index: {str(e)}")
+
+
+@app.get("/api/index/health")
+async def get_index_health() -> Dict[str, Any]:
+    """
+    Run health checks on the SQLite index.
+    
+    Returns:
+        Health check results including stats, warnings, and errors
+    """
+    from .health_checks import run_all_health_checks
+    from .index_db import database_exists, get_db_path
+    
+    db_path = get_db_path()
+    
+    if not database_exists(db_path):
+        raise HTTPException(status_code=404, detail="No index available. Run a crawl first.")
+    
+    try:
+        result = run_all_health_checks(db_path)
+        return result.to_dict()
+        
+    except Exception as e:
+        perf_logger.error("get_index_health", message=str(e))
+        raise HTTPException(status_code=500, detail=f"Error running health checks: {str(e)}")
+
+
+@app.get("/api/index/duplicates")
+async def get_index_duplicates(
+    limit: int = 100,
+    min_size: int = 0
+) -> Dict[str, Any]:
+    """
+    Get duplicate file groups from the SQLite index.
+    
+    Duplicates are files with the same MD5 hash and size.
+    
+    Args:
+        limit: Maximum number of groups to return
+        min_size: Minimum file size to consider (bytes)
+        
+    Returns:
+        Dict with duplicate groups and total savings info
+    """
+    from .queries import get_duplicate_groups, get_total_duplicate_savings, get_duplicate_files_detail
+    from .index_db import database_exists, get_db_path, get_connection
+    
+    db_path = get_db_path()
+    
+    if not database_exists(db_path):
+        raise HTTPException(status_code=404, detail="No index available. Run a crawl first.")
+    
+    try:
+        with get_connection(db_path) as conn:
+            groups = get_duplicate_groups(conn, min_size=min_size, limit=limit)
+            savings = get_total_duplicate_savings(conn)
+            
+            # Add file details to each group
+            for group in groups:
+                group["files"] = get_duplicate_files_detail(conn, group["file_ids"])
+        
+        return {
+            "groups": groups,
+            "total_groups": savings["total_groups"],
+            "total_duplicate_files": savings["total_duplicate_files"],
+            "total_wasted_bytes": savings["total_wasted_bytes"],
+            "total_wasted_gb": round(savings["total_wasted_bytes"] / (1024**3), 2),
+        }
+        
+    except Exception as e:
+        perf_logger.error("get_index_duplicates", message=str(e))
+        raise HTTPException(status_code=500, detail=f"Error getting duplicates: {str(e)}")
+
+
+@app.delete("/api/index/clear")
+async def clear_index() -> Dict[str, str]:
+    """
+    Clear the SQLite index database.
+    
+    This removes all indexed data. A new crawl will be required.
+    
+    Returns:
+        Success message
+    """
+    from .index_db import clear_database, get_db_path
+    
+    try:
+        clear_database(get_db_path())
+        return {"message": "SQLite index cleared successfully"}
+        
+    except Exception as e:
+        perf_logger.error("clear_index", message=str(e))
+        raise HTTPException(status_code=500, detail=f"Error clearing index: {str(e)}")

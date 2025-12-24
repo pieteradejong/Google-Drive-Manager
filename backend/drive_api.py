@@ -1,12 +1,47 @@
 """Core Google Drive API operations."""
 from collections import defaultdict
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, Callable
 from datetime import datetime, timezone
 import time
 from .utils.logger import timed_operation, log_timing, PerformanceLogger
 
 # Performance logger for drive_api operations
 perf_logger = PerformanceLogger("drive_api")
+
+# Comprehensive fields for full metadata capture (per SPECIFICATION.md)
+# This captures all fields needed for:
+# - Duplicate detection (md5Checksum, size)
+# - Shortcuts (shortcutDetails)
+# - Capabilities for future actions
+# - Owner info for filtering
+FULL_FIELDS = (
+    "nextPageToken, files("
+    "id, name, mimeType, parents, trashed, createdTime, modifiedTime, "
+    "size, md5Checksum, ownedByMe, "
+    "owners(displayName, emailAddress, permissionId), "
+    "capabilities(canTrash, canDelete, canMoveItemWithinDrive, "
+    "canRemoveChildren, canAddChildren, canRename, canShare), "
+    "shortcutDetails(targetId, targetMimeType), "
+    "starred, webViewLink, iconLink"
+    ")"
+)
+
+# Fields for Changes API responses
+CHANGES_FIELDS = (
+    "nextPageToken, newStartPageToken, "
+    "changes(fileId, removed, file("
+    "id, name, mimeType, parents, trashed, createdTime, modifiedTime, "
+    "size, md5Checksum, ownedByMe, "
+    "owners(displayName, emailAddress, permissionId), "
+    "capabilities(canTrash, canDelete, canMoveItemWithinDrive, "
+    "canRemoveChildren, canAddChildren, canRename, canShare), "
+    "shortcutDetails(targetId, targetMimeType), "
+    "starred, webViewLink, iconLink"
+    "))"
+)
+
+# Minimal fields for backward compatibility with existing code
+MINIMAL_FIELDS = "nextPageToken, files(id, name, mimeType, parents, size, createdTime, modifiedTime, webViewLink)"
 
 
 def list_all_files(service) -> List[Dict[str, Any]]:
@@ -329,6 +364,237 @@ def check_recently_modified(service, since_timestamp: datetime, limit: int = 1) 
         )
         # Return empty list on error - we'll fall back to time-based validation
         return []
+
+
+# =============================================================================
+# New functions for SQLite indexer (per SPECIFICATION.md)
+# =============================================================================
+
+def list_all_files_full(
+    service,
+    include_trashed: bool = False,
+    progress_callback: Optional[Callable[[int, int], None]] = None
+) -> List[Dict[str, Any]]:
+    """
+    Fetch all files from Google Drive with comprehensive metadata.
+    
+    Uses FULL_FIELDS to capture all metadata needed for:
+    - Duplicate detection (md5Checksum)
+    - Shortcut handling
+    - Capability-aware actions
+    
+    Args:
+        service: Authenticated Google Drive API service
+        include_trashed: Whether to include trashed files (default: False)
+        progress_callback: Optional callback(files_fetched, page_count) for progress
+        
+    Returns:
+        List of file dictionaries with full metadata
+    """
+    all_files = []
+    page_token = None
+    page_count = 0
+    start_time = time.perf_counter()
+    
+    # Build query
+    query = None if include_trashed else "trashed=false"
+    
+    while True:
+        try:
+            page_count += 1
+            page_start = time.perf_counter()
+            
+            request_params = {
+                "pageSize": 1000,
+                "fields": FULL_FIELDS,
+                "corpora": "user",
+                "spaces": "drive",
+                "includeItemsFromAllDrives": False,
+                "supportsAllDrives": False,
+            }
+            if query:
+                request_params["q"] = query
+            if page_token:
+                request_params["pageToken"] = page_token
+            
+            results = service.files().list(**request_params).execute()
+            
+            page_duration_ms = (time.perf_counter() - page_start) * 1000
+            
+            files = results.get('files', [])
+            all_files.extend(files)
+            page_token = results.get('nextPageToken')
+            
+            # Call progress callback if provided
+            if progress_callback:
+                progress_callback(len(all_files), page_count)
+            
+            # Log every 10 pages or on slow pages
+            if page_count % 10 == 0 or page_duration_ms > 1000:
+                perf_logger.info(
+                    "list_all_files_full.page_fetch",
+                    duration_ms=page_duration_ms,
+                    page=page_count,
+                    files_so_far=len(all_files)
+                )
+            
+            if not page_token:
+                break
+                
+        except Exception as e:
+            total_duration_ms = (time.perf_counter() - start_time) * 1000
+            perf_logger.error(
+                "list_all_files_full",
+                duration_ms=total_duration_ms,
+                message=f"Error fetching page {page_count}: {str(e)}",
+                pages_fetched=page_count,
+                files_fetched=len(all_files)
+            )
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    total_duration_ms = (time.perf_counter() - start_time) * 1000
+    perf_logger.info(
+        "list_all_files_full",
+        duration_ms=total_duration_ms,
+        files=len(all_files),
+        pages=page_count
+    )
+    
+    return all_files
+
+
+def get_start_page_token(service) -> str:
+    """
+    Get the initial page token for the Changes API.
+    
+    This token represents the current state of the Drive.
+    Store this after a full crawl to enable incremental sync.
+    
+    Args:
+        service: Authenticated Google Drive API service
+        
+    Returns:
+        Start page token string
+    """
+    start_time = time.perf_counter()
+    try:
+        response = service.changes().getStartPageToken(
+            supportsAllDrives=False
+        ).execute()
+        
+        token = response.get('startPageToken')
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        perf_logger.info(
+            "get_start_page_token",
+            duration_ms=duration_ms,
+            token_prefix=token[:10] if token else None
+        )
+        return token
+    except Exception as e:
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        perf_logger.error(
+            "get_start_page_token",
+            duration_ms=duration_ms,
+            message=f"Error: {str(e)}"
+        )
+        raise
+
+
+def list_changes(
+    service,
+    page_token: str,
+    progress_callback: Optional[Callable[[int, int], None]] = None
+) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Fetch changes since the given page token.
+    
+    This is the core of incremental sync - it returns only files that
+    have been added, modified, or removed since the token was issued.
+    
+    Args:
+        service: Authenticated Google Drive API service
+        page_token: The page token from previous sync or getStartPageToken
+        progress_callback: Optional callback(changes_fetched, page_count) for progress
+        
+    Returns:
+        Tuple of (list of change dicts, new_start_page_token)
+        
+    Each change dict has:
+        - fileId: The ID of the changed file
+        - removed: True if file was deleted/removed from view
+        - file: File object (if not removed) with full metadata
+    """
+    all_changes = []
+    current_token = page_token
+    page_count = 0
+    new_start_token = None
+    start_time = time.perf_counter()
+    
+    while True:
+        try:
+            page_count += 1
+            page_start = time.perf_counter()
+            
+            response = service.changes().list(
+                pageToken=current_token,
+                spaces="drive",
+                includeItemsFromAllDrives=False,
+                supportsAllDrives=False,
+                fields=CHANGES_FIELDS,
+                pageSize=1000
+            ).execute()
+            
+            page_duration_ms = (time.perf_counter() - page_start) * 1000
+            
+            changes = response.get('changes', [])
+            all_changes.extend(changes)
+            
+            # Call progress callback if provided
+            if progress_callback:
+                progress_callback(len(all_changes), page_count)
+            
+            # Log progress
+            if page_count % 5 == 0 or page_duration_ms > 1000:
+                perf_logger.info(
+                    "list_changes.page_fetch",
+                    duration_ms=page_duration_ms,
+                    page=page_count,
+                    changes_so_far=len(all_changes)
+                )
+            
+            # Check for more pages
+            next_page_token = response.get('nextPageToken')
+            if next_page_token:
+                current_token = next_page_token
+            else:
+                # No more pages - get the new start token for next sync
+                new_start_token = response.get('newStartPageToken')
+                break
+                
+        except Exception as e:
+            total_duration_ms = (time.perf_counter() - start_time) * 1000
+            perf_logger.error(
+                "list_changes",
+                duration_ms=total_duration_ms,
+                message=f"Error fetching changes page {page_count}: {str(e)}",
+                pages_fetched=page_count,
+                changes_fetched=len(all_changes)
+            )
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    total_duration_ms = (time.perf_counter() - start_time) * 1000
+    perf_logger.info(
+        "list_changes",
+        duration_ms=total_duration_ms,
+        changes=len(all_changes),
+        pages=page_count
+    )
+    
+    return all_changes, new_start_token
 
 
 

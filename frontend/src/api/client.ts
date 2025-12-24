@@ -110,6 +110,20 @@ export const api = {
     });
   },
 
+  /** Get cached full scan data (instant load, no polling) */
+  getCachedFullScan: async (): Promise<ScanResponse | null> => {
+    try {
+      const response = await apiClient.get<ScanResponse>('/api/scan/full/cached');
+      return response.data;
+    } catch (e) {
+      // 404 means no valid cache - return null instead of throwing
+      if (axios.isAxiosError(e) && e.response?.status === 404) {
+        return null;
+      }
+      throw e;
+    }
+  },
+
   /** Derived analytics cache status */
   getAnalyticsStatus: async (): Promise<any> => {
     return measureAsync('API: analyticsStatus', async () => {

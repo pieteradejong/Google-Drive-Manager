@@ -22,8 +22,22 @@ export const useFullScan = () => {
   const startTimeRef = useRef<number | null>(null);
   const lastProgressRef = useRef<number | null>(null);
 
-  // Check for cached full scan result in query client
-  const cachedResult = queryClient.getQueryData<ScanResponse>(['fullScanResult']);
+  // Load cached full scan data on mount (instant, no polling needed)
+  const {
+    data: cachedData,
+    isLoading: isCacheLoading,
+    dataUpdatedAt: cacheDataUpdatedAt,
+  } = useQuery({
+    queryKey: ['fullScanResult'] as const,
+    queryFn: async (): Promise<ScanResponse | null> => api.getCachedFullScan(),
+    staleTime: 30 * 60 * 1000, // 30 minutes - don't refetch if we have data
+    gcTime: 60 * 60 * 1000, // Keep in cache for 1 hour
+    retry: false, // Don't retry 404s
+    refetchOnMount: false, // Don't refetch if we already have data
+  });
+
+  // Check for cached full scan result in query client (fallback)
+  const cachedResult = cachedData || queryClient.getQueryData<ScanResponse>(['fullScanResult']);
 
   // Mutation to start a scan
   const startScanMutation = useMutation({
@@ -71,8 +85,11 @@ export const useFullScan = () => {
     gcTime: 30 * 60 * 1000, // Keep in cache for 30 minutes (renamed from cacheTime in TanStack Query v5)
   });
 
-  // Extract result from progress or cached data
+  // Extract result from progress or cached data (prefer fresh scan result, fall back to cache)
   const result = progress?.result || cachedResult || null;
+  
+  // Use cache data timestamp if we loaded from cache, otherwise use poll timestamp
+  const effectiveDataUpdatedAt = result === cachedResult ? cacheDataUpdatedAt : dataUpdatedAt;
 
   // Update timing based on progress
   useEffect(() => {
@@ -129,10 +146,11 @@ export const useFullScan = () => {
     scanId,
     progress: progress || null,
     result,
-    isLoading: startScanMutation.isPending || isPolling,
+    isLoading: isCacheLoading || startScanMutation.isPending || isPolling,
     error: startScanMutation.error || pollError || null,
     startScan,
-    dataUpdatedAt, // For cache status indicators
+    dataUpdatedAt: effectiveDataUpdatedAt, // For cache status indicators
     timing, // Performance timing information
+    isFromCache: result === cachedResult && !progress?.result, // Indicates if showing cached data
   };
 };

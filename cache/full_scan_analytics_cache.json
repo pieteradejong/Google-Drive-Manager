@@ -1,0 +1,209 @@
+{
+  "data": {
+    "derived_version": 2,
+    "duplicates": {
+      "groups": [],
+      "total_potential_savings": 0
+    },
+    "depths": {
+      "depth_by_id": {
+        "folder1": 0,
+        "folder2": 1
+      },
+      "distribution": [
+        {
+          "depth": 0,
+          "folder_count": 1,
+          "total_size": 0
+        },
+        {
+          "depth": 1,
+          "folder_count": 1,
+          "total_size": 0
+        }
+      ],
+      "max_depth": 1,
+      "deepest_folder_ids": [
+        "folder2",
+        "folder1"
+      ]
+    },
+    "semantic": {
+      "folder_category": {
+        "folder1": {
+          "category": "Backup/Archive",
+          "confidence": "high",
+          "method": "name"
+        },
+        "folder2": {
+          "category": "Backup/Archive",
+          "confidence": "high",
+          "method": "name"
+        }
+      },
+      "totals": {
+        "Backup/Archive": {
+          "folder_count": 2,
+          "total_size": 0
+        }
+      },
+      "category_folder_ids": {
+        "Backup/Archive": [
+          "folder1",
+          "folder2"
+        ]
+      },
+      "uncategorized_count": 0,
+      "uncategorized_folder_ids": []
+    },
+    "age_semantic": {
+      "buckets": [
+        "0-30 days",
+        "30-90 days",
+        "90-180 days",
+        "180-365 days",
+        "365+ days"
+      ],
+      "matrix": {
+        "Backup/Archive": {
+          "365+ days": {
+            "folder_count": 2,
+            "total_size": 0
+          }
+        }
+      }
+    },
+    "type_semantic": {
+      "groups": [
+        "Images",
+        "Videos",
+        "Audio",
+        "Documents",
+        "Other"
+      ],
+      "matrix": {
+        "Uncategorized": {
+          "Documents": {
+            "file_count": 1,
+            "total_size": 1024
+          }
+        },
+        "Backup/Archive": {
+          "Images": {
+            "file_count": 1,
+            "total_size": 2048
+          },
+          "Videos": {
+            "file_count": 1,
+            "total_size": 1048576
+          }
+        }
+      }
+    },
+    "orphans": {
+      "orphans": [],
+      "count": 0
+    },
+    "types": {
+      "groups": {
+        "Folders": {
+          "count": 2,
+          "total_size": 0
+        },
+        "Images": {
+          "count": 1,
+          "total_size": 2048
+        },
+        "Documents": {
+          "count": 1,
+          "total_size": 1024
+        },
+        "Videos": {
+          "count": 1,
+          "total_size": 1048576
+        }
+      }
+    },
+    "timeline": {
+      "created": {
+        "day": {
+          "2024-01-01": {
+            "count": 1,
+            "total_size": 1024
+          },
+          "2024-01-02": {
+            "count": 1,
+            "total_size": 2048
+          },
+          "2024-01-04": {
+            "count": 1,
+            "total_size": 1048576
+          }
+        },
+        "week": {
+          "2024-01-01": {
+            "count": 3,
+            "total_size": 1051648
+          }
+        },
+        "month": {
+          "2024-01": {
+            "count": 3,
+            "total_size": 1051648
+          }
+        }
+      },
+      "modified": {
+        "day": {
+          "2024-01-01": {
+            "count": 1,
+            "total_size": 1024
+          },
+          "2024-01-02": {
+            "count": 1,
+            "total_size": 2048
+          },
+          "2024-01-04": {
+            "count": 1,
+            "total_size": 1048576
+          }
+        },
+        "week": {
+          "2024-01-01": {
+            "count": 3,
+            "total_size": 1051648
+          }
+        },
+        "month": {
+          "2024-01": {
+            "count": 3,
+            "total_size": 1051648
+          }
+        }
+      }
+    },
+    "large": {
+      "top_file_ids": [
+        "file3",
+        "file2",
+        "file1"
+      ],
+      "top_folder_ids": [
+        "folder1",
+        "folder2"
+      ]
+    }
+  },
+  "metadata": {
+    "computed_at": "2025-12-24T00:26:15.339909+00:00",
+    "source_scan_type": "full_scan",
+    "source_cache_timestamp": "2025-12-24T00:26:15.336618+00:00",
+    "source_cache_version": 1,
+    "source_file_count": 5,
+    "source_total_size": 1051648,
+    "derived_version": 2,
+    "timings_ms": {
+      "analytics.total": 0.09491700620856136
+    }
+  }
+}
