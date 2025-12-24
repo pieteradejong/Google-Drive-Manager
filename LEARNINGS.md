@@ -1,767 +1,483 @@
-# Project Learnings & Best Practices
+# Project Learnings
 
-This document captures key learnings, patterns, and best practices discovered during the development of the Google Drive Manager application.
+This document captures key learnings, patterns, and best practices discovered while building the Google Drive Manager application.
+
+---
 
 ## Table of Contents
 
-1. [Performance & Memory Management](#performance--memory-management)
-2. [Visualization Safety](#visualization-safety)
-3. [Caching Strategy](#caching-strategy)
-4. [Error Handling](#error-handling)
-5. [Code Organization](#code-organization)
-6. [React Best Practices](#react-best-practices)
-7. [D3.js Best Practices](#d3js-best-practices)
-8. [Common Pitfalls](#common-pitfalls)
+1. [Project Structure](#project-structure)
+2. [Testing Strategy](#testing-strategy)
+3. [Caching Architecture](#caching-architecture)
+4. [SQLite Indexer](#sqlite-indexer)
+5. [Google Drive API](#google-drive-api)
+6. [Linting & Formatting](#linting--formatting)
+7. [Common Pitfalls](#common-pitfalls)
 
 ---
 
-## Performance & Memory Management
+## Project Structure
 
-### Bundle Size Optimization
+### Directory Layout
 
-**Learning**: Large JavaScript bundles significantly impact initial load time and memory usage.
-
-**Solutions Applied**:
-- **Code Splitting**: Lazy load experiment components using React.lazy()
-- **Tree Shaking**: Import only needed D3.js modules instead of entire library
-  - Before: `import * as d3 from 'd3'` (~200KB)
-  - After: `import { select } from 'd3-selection'` (~5KB per module)
-- **Result**: Bundle reduced from 351KB to 292KB (15% reduction)
-
-**Key Takeaway**: Always use tree-shaking compatible imports for large libraries.
-
-### Memory Leaks Prevention
-
-**Learning**: D3.js visualizations can leak memory if not properly cleaned up.
-
-**Solutions Applied**:
-- Always return cleanup function from `useEffect` hooks
-- Remove all SVG elements before re-rendering: `svg.selectAll('*').remove()`
-- Clean up event listeners and tooltips
-
-**Pattern**:
-```typescript
-useEffect(() => {
-  // ... rendering code ...
-  
-  return () => {
-    if (svgRef.current) {
-      select(svgRef.current).selectAll('*').remove();
-    }
-  };
-}, [dependencies]);
+```
+Google-Drive-Manager/
+├── backend/                 # FastAPI backend
+│   ├── tests/              # pytest test files
+│   ├── middleware/         # Custom middleware
+│   ├── utils/              # Utility modules
+│   ├── main.py             # FastAPI app entry point
+│   ├── drive_api.py        # Google Drive API wrapper
+│   ├── cache.py            # Caching layer
+│   ├── index_db.py         # SQLite database layer
+│   ├── crawl_full.py       # Full crawl algorithm
+│   ├── sync_changes.py     # Incremental sync using Changes API
+│   ├── analytics.py        # Derived analytics computations
+│   ├── queries.py          # Database query functions
+│   └── health_checks.py    # Database health checks
+├── frontend/               # React/TypeScript frontend
+├── scripts/                # Shell scripts (init.sh, run.sh, test.sh)
+├── cache/                  # Local cache files (gitignored)
+└── data/                   # SQLite database (gitignored)
 ```
 
-### Memoization for Expensive Computations
+### Key Insight: Script Paths
+When moving shell scripts to a `scripts/` directory, remember to update `PROJECT_ROOT`:
 
-**Learning**: Expensive operations (tree building, grouping, sorting) should be memoized.
+```bash
+# Before (in project root)
+PROJECT_ROOT="$SCRIPT_DIR"
 
-**Solutions Applied**:
-- Use `useMemo` for:
-  - `buildFolderTree()` - Recursive tree building
-  - `groupByDatePeriod()` - Date grouping
-  - `groupByType()` - Type grouping
-  - Search filtering and sorting
+# After (in scripts/ subdirectory)
+PROJECT_ROOT="$( cd "$SCRIPT_DIR/.." && pwd )"
+```
 
-**Pattern**:
-```typescript
-const folderTree = useMemo(
-  () => buildFolderTree(files, childrenMap),
-  [files, childrenMap]
+---
+
+## Testing Strategy
+
+### Test Organization
+
+Tests are organized by module with clear naming conventions:
+
+- `test_<module>.py` - Unit tests for a specific module
+- `conftest.py` - Shared fixtures and test utilities
+
+### Fixture Patterns
+
+**1. Mock External Services**
+```python
+@pytest.fixture
+def mock_drive_service():
+    """Create a mock Google Drive service."""
+    service = MagicMock()
+    service.files().list().execute.return_value = {'files': []}
+    return service
+```
+
+**2. Temporary Databases**
+```python
+@pytest.fixture
+def temp_db_path(tmp_path):
+    """Provide a temporary database path."""
+    db_file = tmp_path / "test_drive_index.db"
+    init_db(db_file)
+    yield db_file
+    if db_file.exists():
+        db_file.unlink()
+```
+
+**3. Sample Data Fixtures**
+```python
+@pytest.fixture
+def sample_files():
+    """Provide sample file data for testing."""
+    return [
+        {'id': 'file1', 'name': 'doc.pdf', 'mimeType': 'application/pdf', 'size': '1024'},
+        {'id': 'folder1', 'name': 'Folder', 'mimeType': 'application/vnd.google-apps.folder'},
+    ]
+```
+
+### Patching Best Practices
+
+**Critical Learning: Patch Where Used, Not Where Defined**
+
+When patching functions, patch them in the module where they're *used*, not where they're *defined*:
+
+```python
+# WRONG - patches the original definition
+@patch('backend.index_db.database_exists')
+
+# RIGHT - patches where the function is imported and used
+@patch('backend.main.database_exists')  # If main.py does: from .index_db import database_exists
+
+# ALSO RIGHT - if importing from original module
+@patch('backend.index_db.database_exists')  # If code does: from backend.index_db import database_exists
+```
+
+**For locally imported functions inside endpoint handlers:**
+```python
+# If the import happens inside a function:
+def some_endpoint():
+    from .crawl_full import run_full_crawl  # Local import
+    
+# Patch the original module, not the endpoint module
+@patch('backend.crawl_full.run_full_crawl')
+```
+
+### Test Markers
+
+Use pytest markers for categorization:
+
+```python
+@pytest.mark.unit
+@pytest.mark.integration
+@pytest.mark.api
+@pytest.mark.sqlite
+@pytest.mark.analytics
+```
+
+Configure in `pytest.ini`:
+```ini
+[pytest]
+markers =
+    unit: Unit tests
+    integration: Integration tests
+    api: API endpoint tests
+```
+
+---
+
+## Caching Architecture
+
+### Two-Tier Caching
+
+1. **Quick Scan Cache** - Fast overview data (quota, top folders, recent files)
+2. **Full Scan Cache** - Complete file tree with all metadata
+
+### Cache Validation Strategy
+
+```python
+def validate_cache_with_drive(service, metadata, max_api_ttl=300):
+    """
+    Smart cache validation:
+    1. If cache < 5 min old: valid (skip API call)
+    2. Else: check Drive Changes API for modifications
+    """
+    cache_age = (datetime.now(timezone.utc) - parse_timestamp(metadata.timestamp)).total_seconds()
+    
+    if cache_age < max_api_ttl:
+        return True  # Trust recent cache
+    
+    # Check for changes since cache was created
+    return not check_drive_has_changes(service, metadata.timestamp)
+```
+
+### Derived Analytics Cache
+
+Analytics are computed once per full scan and cached separately:
+
+```python
+class AnalyticsCacheMetadata:
+    computed_at: str                    # When analytics were computed
+    source_cache_timestamp: str         # Full scan cache timestamp used
+    source_cache_version: int           # Full scan cache version
+    derived_version: int                # Analytics schema version
+```
+
+**Invalidation Rule:** Analytics cache is invalid if `source_cache_timestamp` doesn't match current full scan cache timestamp.
+
+---
+
+## SQLite Indexer
+
+### Schema Design
+
+```sql
+-- Core file storage
+CREATE TABLE files (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    mime_type TEXT,
+    size INTEGER DEFAULT 0,
+    created_time TEXT,
+    modified_time TEXT,
+    trashed INTEGER DEFAULT 0,
+    removed INTEGER DEFAULT 0,  -- Soft delete flag
+    raw_json TEXT               -- Full API response
+);
+
+-- Parent-child relationships (supports multiple parents)
+CREATE TABLE parent_edges (
+    file_id TEXT NOT NULL,
+    parent_id TEXT NOT NULL,
+    PRIMARY KEY (file_id, parent_id)
+);
+
+-- Sync state persistence
+CREATE TABLE sync_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 ```
 
-**Key Takeaway**: Memoize any computation that processes large arrays or performs recursion.
+### Key Sync States
 
-### Debouncing User Input
+```python
+# Essential sync state keys
+"start_page_token"      # Changes API token for incremental sync
+"last_full_crawl_time"  # Timestamp of last full crawl
+"last_sync_time"        # Timestamp of last incremental sync
+"file_count"            # Number of files in index
+"schema_version"        # Database schema version
+```
 
-**Learning**: Immediate filtering on every keystroke causes lag with large datasets.
+### Soft Deletes
 
-**Solutions Applied**:
-- Debounce search input by 300ms
-- Prevents unnecessary re-renders and computations
+Files are never hard-deleted; they're marked as removed:
 
-**Pattern**:
-```typescript
-const debouncedSearchQuery = useDebounce(searchQuery, 300);
+```python
+def mark_file_removed(conn, file_id):
+    """Mark file as removed and delete parent edges."""
+    conn.execute("UPDATE files SET removed = 1 WHERE id = ?", (file_id,))
+    conn.execute("DELETE FROM parent_edges WHERE file_id = ?", (file_id,))
 ```
 
 ---
 
-## Visualization Safety
+## Google Drive API
 
-### Infinite Loop Prevention
+### Essential Endpoints
 
-**Critical Learning**: Recursive functions building folder hierarchies can cause infinite loops if there are circular references in the data.
+| Endpoint | Purpose |
+|----------|---------|
+| `files.list()` | List files with pagination |
+| `about.get()` | Get storage quota and user info |
+| `changes.getStartPageToken()` | Get token for Changes API |
+| `changes.list()` | Get file changes since token |
 
-**Problem**: Google Drive can have circular folder references (shared folders, data inconsistencies).
+### Pagination Pattern
 
-**Solutions Applied**:
-1. **Cycle Detection**: Track visited nodes using `Set<string>`
-2. **Depth Limiting**: Limit recursion depth (e.g., MAX_DEPTH = 10-50)
-3. **Node Counting**: Limit total nodes processed (e.g., MAX_NODES = 5000)
-
-**Pattern**:
-```typescript
-const buildHierarchy = (
-  fileId: string, 
-  depth: number = 0, 
-  path: Set<string> = new Set()
-): any => {
-  // Prevent infinite loops
-  if (path.has(fileId)) {
-    console.warn(`Circular reference detected for ${fileId}`);
-    return null;
-  }
-  
-  // Limit recursion depth
-  if (depth > MAX_DEPTH) return null;
-  
-  // Limit total nodes
-  if (nodeCount >= MAX_NODES) return null;
-  
-  const newPath = new Set(path);
-  newPath.add(fileId);
-  
-  // ... rest of logic ...
-};
+```python
+def list_all_files(service, query="", fields="*"):
+    """Paginate through all files."""
+    all_files = []
+    page_token = None
+    
+    while True:
+        response = service.files().list(
+            q=query,
+            fields=f"nextPageToken, files({fields})",
+            pageSize=1000,
+            pageToken=page_token
+        ).execute()
+        
+        all_files.extend(response.get('files', []))
+        page_token = response.get('nextPageToken')
+        
+        if not page_token:
+            break
+    
+    return all_files
 ```
 
-**Applied To**:
-- ✅ SunburstView
-- ✅ TreemapView
-- ✅ ListView (FileRow component)
-- ✅ buildFolderTree() utility
+### Changes API for Incremental Sync
 
-### DOM Element Limiting
-
-**Learning**: Rendering thousands of DOM elements crashes the browser.
-
-**Solutions Applied**:
-1. **Limit Root Items**: Only show top 50-100 root folders
-2. **Limit Visible Nodes**: Cap at 5,000 nodes for D3 visualizations
-3. **Limit Rendered Items**: 
-   - TimelineView: 500 items per group
-   - SearchFirstView: 1,000 results max
-4. **Show Warnings**: Inform users when data is limited
-
-**Pattern**:
-```typescript
-const visibleItems = items.length > MAX_ITEMS 
-  ? items.slice(0, MAX_ITEMS)
-  : items;
-
-{items.length > MAX_ITEMS && (
-  <div>Showing first {MAX_ITEMS} of {items.length} items</div>
-)}
+```python
+def list_changes(service, start_token, progress_callback=None):
+    """Get all changes since the given token."""
+    changes = []
+    page_token = start_token
+    
+    while True:
+        response = service.changes().list(
+            pageToken=page_token,
+            fields="nextPageToken, newStartPageToken, changes(fileId, removed, file(*))",
+            pageSize=1000,
+            includeRemoved=True
+        ).execute()
+        
+        changes.extend(response.get('changes', []))
+        
+        if 'newStartPageToken' in response:
+            # All changes fetched, return new token
+            return changes, response['newStartPageToken']
+        
+        page_token = response['nextPageToken']
 ```
 
-**Key Takeaway**: Always limit DOM elements, especially for large datasets. Use virtualization for truly large lists.
+### MIME Types
 
-### Error Handling in Visualizations
+```python
+FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
+SHORTCUT_MIME_TYPE = "application/vnd.google-apps.shortcut"
 
-**Learning**: D3 visualizations can fail silently or crash the browser without proper error handling.
-
-**Solutions Applied**:
-- Wrap all D3 rendering in try-catch blocks
-- Show user-friendly error messages
-- Gracefully degrade when rendering fails
-
-**Pattern**:
-```typescript
-try {
-  // ... D3 rendering code ...
-} catch (error) {
-  console.error('Error rendering visualization:', error);
-  svg.append('text')
-    .attr('x', width / 2)
-    .attr('y', height / 2)
-    .attr('text-anchor', 'middle')
-    .attr('fill', '#f00')
-    .text('Error rendering visualization. Try a different view.');
+# Google Workspace types (no size property)
+GOOGLE_DOCS_TYPES = {
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.google-apps.presentation",
+    # ... etc
 }
 ```
 
-**Applied To**:
-- ✅ SunburstView
-- ✅ TreemapView
-- ✅ SankeyView
-
 ---
 
-## Caching Strategy
+## Linting & Formatting
 
-### Hybrid Caching Approach
+### Tools Used
 
-**Learning**: Different scan types benefit from different caching strategies.
+| Tool | Purpose |
+|------|---------|
+| **black** | Code formatting (Python) |
+| **flake8** | Linting/style checking (Python) |
+| **mypy** | Type checking (Python) |
+| **eslint** | Linting (TypeScript/React) |
 
-**Implementation**:
-- **Quick Scan**: 
-  - Server-side: 7 days TTL + smart validation (optimized for rarely-changing drives)
-  - Client-side: 5 minutes staleTime, 1 hour cacheTime
-- **Full Scan**:
-  - Server-side: 30 days TTL + smart validation (Drive API change detection)
-  - Client-side: 30 minutes cacheTime
+### Flake8 Configuration
 
-**Smart Cache Invalidation**:
-- If cache is past TTL, check Drive API for recently modified files
-- If no files modified: cache is still valid (even if past TTL) - can persist indefinitely
-- If files modified: cache is invalidated
-- Only 1 API call needed to check for changes (pageSize=1, minimal fields)
+Create `backend/.flake8`:
 
-**Optimization for Rarely-Changing Drives**:
-- **Extended TTLs**: 7 days (quick), 30 days (full) as initial check
-- **Persistent Cache**: Cache remains valid indefinitely until files actually change
-- **Minimal API Usage**: For drives with ~12 files changing per week, may only need 1 scan per month
-- **Efficiency**: One API call to detect changes vs. full scan of thousands of files
-
-**Key Takeaway**: Smart invalidation based on actual changes (not time alone) dramatically reduces unnecessary scans and API usage for rarely-changing drives.
-
-### Cache File Management
-
-**Learning**: Large cache files (46MB+) are normal for large Drives but need monitoring.
-
-**Best Practices**:
-- Cache files stored in `cache/` directory (gitignored)
-- Atomic writes (write to temp file, then rename)
-- Automatic cleanup of corrupted cache files
-- Manual invalidation via API endpoint
-- Cache can persist for weeks/months if Drive unchanged
-
-### Performance Impact
-
-**Before Optimization**:
-- Quick scan: ~168 scans per week (every hour)
-- Full scan: 1 scan per week
-- Many unnecessary API calls
-
-**After Optimization** (for rarely-changing drives):
-- Quick scan: 0-1 scans per week (only when files change)
-- Full scan: ~1 scan per month (only when files change)
-- Minimal API usage - only checks for changes, doesn't rescan
-
----
-
-## Error Handling
-
-### Defensive Programming
-
-**Learning**: Always validate inputs and handle edge cases.
-
-**Patterns Applied**:
-- Check for zero dimensions before rendering
-- Validate data exists before processing
-- Handle missing/null values gracefully
-- Provide fallback UI states
-
-**Example**:
-```typescript
-if (width === 0 || height === 0) return; // Guard against zero dimensions
-if (!rootData.children || rootData.children.length === 0) {
-  // Show empty state
-  return;
-}
+```ini
+[flake8]
+max-line-length = 120
+extend-ignore = 
+    E203,  # Whitespace before ':' (conflicts with black)
+    W503,  # Line break before binary operator
+    E501,  # Line too long (black handles this)
+    E226,  # Missing whitespace around operator
+    E722,  # Bare except
+    E402,  # Import not at top
+    F401,  # Unused imports
+    F841,  # Unused variables
+    F541   # f-string without placeholders
+exclude = 
+    .git,
+    __pycache__,
+    venv
 ```
 
-### User-Friendly Error Messages
+### Running Formatters
 
-**Learning**: Technical error messages confuse users.
+```bash
+# Format all Python files
+python -m black backend/
 
-**Solutions**:
-- Show actionable error messages
-- Provide suggestions (e.g., "Try a different view")
-- Use visual indicators (icons, colors)
-- Log technical details to console for debugging
+# Check formatting without changes
+python -m black --check backend/
 
----
-
-## Code Organization
-
-### Separation of Concerns
-
-**Structure**:
-- `utils/navigation.ts` - Pure utility functions (no React)
-- `hooks/` - React hooks for data fetching
-- `components/experiments/` - Visualization components
-- `stores/` - State management (Zustand)
-
-**Key Takeaway**: Keep utilities pure and testable, separate from React components.
-
-### Shared Utilities
-
-**Learning**: Common operations (formatSize, navigation helpers) should be centralized.
-
-**Benefits**:
-- Single source of truth
-- Easier to test
-- Consistent behavior across components
-- Easier to optimize
-
----
-
-## React Best Practices
-
-### Lazy Loading Components
-
-**Learning**: Not all components need to be loaded initially.
-
-**Implementation**:
-```typescript
-const SunburstView = lazy(() => 
-  import('./experiments/SunburstView').then(m => ({ default: m.SunburstView }))
-);
-
-// Usage with Suspense
-<Suspense fallback={<LoadingFallback />}>
-  <SunburstView {...props} />
-</Suspense>
+# Run linter with config
+python -m flake8 backend/ --config=backend/.flake8
 ```
 
-**Benefits**:
-- Smaller initial bundle
-- Faster initial load
-- Components load on-demand
+### Key Learning: Black + Flake8 Compatibility
 
-### Controlled Component State
-
-**Learning**: Use controlled components for predictable state management.
-
-**Pattern**:
-- All user input uses controlled components
-- State managed in parent components or stores
-- Props flow down, callbacks flow up
-
----
-
-## D3.js Best Practices
-
-### Tree-Shaking Imports
-
-**Learning**: Import only what you need from D3.js.
-
-**Before**:
-```typescript
-import * as d3 from 'd3'; // ~200KB
-```
-
-**After**:
-```typescript
-import { select } from 'd3-selection';
-import { hierarchy, partition } from 'd3-hierarchy';
-import { scaleOrdinal } from 'd3-scale';
-import { schemeCategory10 } from 'd3-scale-chromatic';
-import { arc } from 'd3-shape';
-// Total: ~20-30KB
-```
-
-**Key Takeaway**: D3.js is modular - use specific imports to reduce bundle size.
-
-### Cleanup on Re-render
-
-**Learning**: Always clear previous renderings before creating new ones.
-
-**Pattern**:
-```typescript
-const svg = select(svgRef.current);
-svg.selectAll('*').remove(); // Clear previous render
-// ... create new elements ...
-```
-
-### Use D3's Data Join Pattern
-
-**Learning**: D3's enter/update/exit pattern is efficient for dynamic data.
-
-**Pattern**:
-```typescript
-svg.selectAll('path')
-  .data(data)
-  .enter()
-  .append('path')
-  // ... set attributes ...
-```
+Black and flake8 can conflict. Ignore these flake8 rules when using black:
+- `E203` - Whitespace before ':'
+- `W503` - Line break before binary operator
+- `E501` - Line too long (set higher limit or ignore)
 
 ---
 
 ## Common Pitfalls
 
-### 1. Infinite Recursion
+### 1. Forward Type References
 
-**Problem**: Recursive functions without cycle detection crash the browser.
+When using type hints that reference classes defined later or in circular imports:
 
-**Solution**: Always track visited nodes and limit depth.
-
-### 2. Too Many DOM Elements
-
-**Problem**: Rendering thousands of elements freezes the browser.
-
-**Solution**: Limit items rendered, use virtualization for large lists.
-
-### 3. Memory Leaks
-
-**Problem**: D3 visualizations accumulate DOM elements on re-render.
-
-**Solution**: Always clean up in useEffect return function.
-
-### 4. Missing Error Handling
-
-**Problem**: Errors crash the entire application.
-
-**Solution**: Wrap risky operations in try-catch, show user-friendly messages.
-
-### 5. No Memoization
-
-**Problem**: Expensive computations run on every render.
-
-**Solution**: Use useMemo for expensive operations.
-
-### 6. Full Library Imports
-
-**Problem**: Importing entire libraries bloats bundle size.
-
-**Solution**: Use tree-shaking compatible imports.
-
-### 7. No Debouncing
-
-**Problem**: Immediate filtering on every keystroke causes lag.
-
-**Solution**: Debounce user input (300ms is a good default).
-
----
-
-## Performance Metrics
-
-### Before Optimizations
-- Bundle size: 351 KB (109 KB gzipped)
-- All components loaded upfront
-- No cycle detection
-- No DOM limiting
-- No error handling
-
-### After Optimizations
-- Bundle size: 292 KB (93 KB gzipped) - **15% reduction**
-- Lazy-loaded components
-- Cycle detection in all recursive functions
-- DOM limiting (5,000 nodes max)
-- Comprehensive error handling
-- Memoization for expensive operations
-- Debounced search input
-
-### Memory Usage
-- **Base React**: ~5 MB
-- **D3.js (tree-shaken)**: ~2-3 MB (down from ~10 MB)
-- **File data (10k files)**: ~5-10 MB
-- **DOM nodes (limited)**: ~10-20 MB (down from 50-100 MB)
-- **Total**: ~22-38 MB (down from 70-125 MB)
-
----
-
-## Recommendations for Future Development
-
-### High Priority
-1. ✅ **Virtualization**: Implement react-window for lists with 1000+ items
-2. ✅ **React.memo**: Wrap components to prevent unnecessary re-renders
-3. ✅ **Pagination**: Limit initial file rendering to first 100-500 items
-
-### Medium Priority
-1. ⚠️ **Code splitting by route**: If adding routing, split by route
-2. ⚠️ **Icon optimization**: Only load used icons from lucide-react
-3. ⚠️ **Service Worker**: Add offline support and caching
-
-### Low Priority
-1. ⚠️ **Web Workers**: Move heavy computations to web workers
-2. ⚠️ **IndexedDB**: Persist cache in browser for offline access
-3. ⚠️ **Compression**: Compress large cache files
-
----
-
-## Testing Insights
-
-### What to Test
-1. **Cycle Detection**: Test with circular folder references
-2. **Large Datasets**: Test with 10,000+ files
-3. **Deep Hierarchies**: Test with 20+ folder levels
-4. **Error Scenarios**: Test with corrupted data, missing files
-5. **Memory Leaks**: Monitor memory usage over time
-6. **Performance**: Measure render times for large datasets
-
-### Test Patterns
-- Mock large datasets (10k+ files)
-- Create circular reference test cases
-- Test error boundaries
-- Monitor bundle size in CI/CD
-
----
-
-## Performance Monitoring & Logging
-
-### Structured Logging
-
-**Learning**: Print statements are insufficient for production debugging. Need structured logging with timing.
-
-**Implementation**:
-- **Backend**: Custom logger with timing decorators and context managers
-- **Structured Format**: `[timestamp] [level] [module] [operation] duration=Xms files=Y`
-- **Automatic Thresholds**: Warnings for >1s, errors for >5s operations
-- **Performance Metadata**: Automatically extracts useful context (file counts, sizes)
-
-**Pattern**:
 ```python
-@timed_operation("build_tree_structure")
-def build_tree_structure(files):
-    # Function automatically timed and logged
-    pass
+# Use string annotations
+def compute_analytics() -> Tuple[Dict, "AnalyticsCacheMetadata"]:
+    from .cache import AnalyticsCacheMetadata  # Import inside function
+    ...
 
-with log_timing("operation_name", files=1000):
-    # Block automatically timed
-    pass
+# Or use TYPE_CHECKING
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .cache import AnalyticsCacheMetadata
 ```
 
-**Key Takeaway**: Structured logging with timing helps identify bottlenecks and track performance regressions.
+### 2. Async Test Fixtures
 
-### Frontend Performance Tracking
+When testing FastAPI with async endpoints:
 
-**Learning**: UI freezes during 20+ second operations create terrible UX. Users need to see what's happening.
-
-**Implementation**:
-- **Performance API**: Use `performance.now()` and `performance.mark()` for timing
-- **Axios Interceptors**: Automatic timing of all API calls
-- **Expensive Operation Tracking**: Wrap heavy calculations with timing utilities
-- **Console Logging**: Automatic warnings for slow operations (>500ms)
-
-**Pattern**:
-```typescript
-measureAsync('semanticAnalysis', async () => {
-  // Operation automatically timed and logged
-  return await heavyComputation();
-}, 1000); // Warn threshold
-```
-
-**Key Takeaway**: Track expensive operations to identify performance issues before users complain.
-
-### Loading States & Progress Indicators
-
-**Learning**: Blank frozen screens during heavy operations create terrible UX. Users need feedback.
-
-**Implementation**:
-- **LoadingState Component**: Shows operation name, details, and progress bar
-- **Operation-Specific Messages**: "Analyzing folder semantics" instead of generic "Loading..."
-- **Progress Tracking**: Estimated remaining time for long operations
-- **Visual Feedback**: Animated spinners, progress bars, completion indicators
-
-**Key Takeaway**: Loading states prevent perceived freeze. Users are patient if they know what's happening.
-
-**Example**:
-```typescript
-if (isAnalyzing) {
-  return (
-    <LoadingState
-      operation="Analyzing folder semantics"
-      details={`Categorizing ${folders.length} folders...`}
-      progress={analysisProgress}
-    />
-  );
-}
-```
-
-### Main-thread Responsiveness: Chunking + Better Big‑O
-
-**Learning**: A loading UI does *not* prevent Chrome’s “Page Unresponsive” if the heavy work runs synchronously on the main thread. React can’t paint, handle input, or update progress while JavaScript is busy.
-
-**Solutions Applied**:
-- **Chunk long loops** and **yield back to the event loop** (e.g., `setTimeout(0)` / `await sleep(0)`) so the browser can paint and remain responsive.
-  - Applied to **Duplicate Finder**: process files in chunks (e.g., 500) and update progress between chunks.
-- **Avoid accidental \(O(n^2)\) scans** on large datasets.
-  - Applied to **semantic analysis**: replaced repeated `allFiles.find(...)` lookups with a `Map(id → FileItem)` for \(O(1)\) access.
-
-**Key Takeaway**:
-- For very large Drives, the difference between “fast enough” and “tab hangs” is often **(a)** yielding during work and **(b)** avoiding quadratic patterns.
-- If we still hit UI limits, the next step is **Web Workers** (off-main-thread computation) for the heaviest analyses.
-
-## User Understanding & Context
-
-### Folder Content Analysis
-
-**Learning**: Users don't understand what's in folders just from paths. Need content summaries.
-
-**Problem**: Users see paths like `grux/node_modules/biz/resolver/test/resolve/node_modules/...` and have no idea what's inside.
-
-**Solution**:
-- **Purpose Detection**: Analyze folder contents to determine purpose (Code Project, Node.js Dependencies, Photo Collection, etc.)
-- **File Type Breakdown**: Show counts of images, videos, code files, documents
-- **Content Summaries**: "15 files, 3 folders (5 images, 10 code files)"
-- **Expandable Details**: Click to see detailed breakdown
-
-**Implementation**:
-- `FolderContentAnalyzer` utility analyzes folder contents
-- Purpose detection based on file types, folder names, content patterns
-- Semantic categorization (Backup, Photos, Code Project, etc.)
-- File type grouping (images, videos, documents, code, archives)
-
-**Key Takeaway**: Help users understand their Drive structure without needing to navigate into every folder.
-
-### Path Truncation for Deep Hierarchies
-
-**Learning**: Very long paths (20+ levels) are unreadable and confusing.
-
-**Solution**: Show only last 3 path segments with "..." prefix for very long paths.
-
-**Example**:
-- Before: `grux / node_modules / biz / resolver / test / resolve / node_modules / rfile / node_modules / umd / node_modules / browserify / node_modules`
-- After: `... / rfile / node_modules / umd`
-
-**Key Takeaway**: Prioritize showing meaningful information over complete paths.
-
-### UI Information Density
-
-**Learning**: Too many refresh buttons and status indicators create clutter without adding value.
-
-**Solution**:
-- Consolidate refresh options into single location
-- Only show refresh if data is >10 minutes old
-- Show timing information instead of just "updated X ago"
-- Remove redundant status indicators
-
-**Key Takeaway**: Less is more. Show what users need to know, not everything possible.
-
-## Testing & Code Quality (December 2024)
-
-### Backend Test Mocking Pitfalls
-
-**Learning**: Python mock patching requires careful consideration of how functions access their dependencies.
-
-**Problems Encountered**:
-1. **Mock patching at wrong level**: Patching `pathlib.Path.exists` doesn't intercept `cache_path.exists()` calls on Path instances
-2. **Mock `open` with file reads**: `mock_open` doesn't work when the actual code path tries to open the real file
-3. **Implementation changes breaking tests**: Adding metadata sidecar files (`.meta.json`) caused tests expecting 1 `unlink` call to fail (now 2 calls)
-4. **Testing validation logic**: Tests patching `is_cache_valid_time_based` failed when implementation actually used `validate_cache_with_drive`
-
-**Solutions Applied**:
-- Use `tmp_path` fixture to create real files instead of complex mocking
-- Patch at the correct module level where functions are imported
-- Update test expectations when implementation adds new file operations
-- Ensure test mocks match actual implementation (not assumed implementation)
-
-**Pattern for File Operations**:
 ```python
-def test_load_cache_success(self, tmp_path):
-    """Test with real temp files instead of complex mocks."""
-    cache_dir = tmp_path / 'cache'
-    cache_dir.mkdir()
-    cache_file = cache_dir / 'quick_scan_cache.json'
-    cache_file.write_text(json.dumps({"data": {"test": "value"}}))
-    
-    with patch('backend.cache.get_cache_path', return_value=cache_file):
-        result = load_cache('quick_scan')
-    
-    assert result is not None
+# Use pytest-asyncio
+@pytest.fixture
+def client():
+    from fastapi.testclient import TestClient
+    from backend.main import app
+    return TestClient(app)
 ```
 
-**Key Takeaway**: Real files in temp directories are often more reliable than complex mock setups for file I/O testing.
+### 3. Mock Context Managers
 
-### TanStack Query v5 Breaking Changes
+When mocking database connections:
 
-**Learning**: TanStack Query v5 has significant API changes from v4 that TypeScript will catch.
-
-**Changes Discovered**:
-1. `cacheTime` → `gcTime` (garbage collection time)
-2. `mutation.isLoading` → `mutation.isPending`
-3. Generic type inference requires explicit `queryFn` return type annotation
-
-**Before (v4)**:
-```typescript
-useQuery<ResponseType, Error>({
-  queryKey: ['key'],
-  queryFn: () => api.fetch(),
-  cacheTime: 60 * 60 * 1000,
-});
-
-// Mutation check
-if (mutation.isLoading) { ... }
+```python
+mock_conn = MagicMock()
+mock_get_connection = MagicMock()
+mock_get_connection.return_value.__enter__ = MagicMock(return_value=mock_conn)
+mock_get_connection.return_value.__exit__ = MagicMock(return_value=False)
 ```
 
-**After (v5)**:
-```typescript
-useQuery({
-  queryKey: ['key'] as const,
-  queryFn: async (): Promise<ResponseType> => api.fetch(),
-  gcTime: 60 * 60 * 1000,
-});
+### 4. Thread Safety in Background Tasks
 
-// Mutation check
-if (mutation.isPending) { ... }
+FastAPI background tasks run in threads. Avoid sharing mutable state:
+
+```python
+# Create fresh database connections per thread
+def background_crawl(service):
+    with get_connection() as conn:  # New connection per call
+        # ... do work
 ```
 
-**Key Takeaway**: When upgrading major versions, check migration guides for breaking changes. TypeScript errors like "Property 'X' does not exist on type 'NoInfer<TQueryFnData>'" often indicate API changes.
+### 5. Google Drive Multiple Parents
 
-### TypeScript Strict Mode Unused Variables
+Files can have multiple parents (especially in shared drives):
 
-**Learning**: TypeScript strict mode (`noUnusedLocals`, `noUnusedParameters`) catches dead code but requires discipline to maintain.
-
-**Common Patterns Found**:
-1. **Unused destructured props**: `{ files, childrenMap, onFileClick }` where `childrenMap` isn't used
-2. **Unused imports**: Importing `useEffect` but never using it after refactoring
-3. **Unused loop variables**: `array.map((item, index) => ...)` where `index` isn't needed
-4. **Callback parameters**: Event handlers like `.on('click', (event, d) => ...)` where `event` isn't used
-
-**Solutions Applied**:
-- Prefix intentionally unused variables with underscore: `_index`, `_event`
-- Remove unused imports immediately when refactoring
-- Remove unused props from destructuring if the interface allows
-
-**Pattern**:
-```typescript
-// Before (TypeScript error)
-files.map((file, index) => <div key={file.id}>{file.name}</div>)
-
-// After (no error)
-files.map((file) => <div key={file.id}>{file.name}</div>)
-
-// Or if index needed elsewhere but not here
-files.map((file, _index) => <div key={file.id}>{file.name}</div>)
+```python
+# Always handle parents as a list
+parents = file.get('parents', [])
+for parent_id in parents:
+    replace_parents(conn, file['id'], parents)
 ```
-
-**Key Takeaway**: Add ESLint config with `@typescript-eslint/no-unused-vars` set to ignore underscore-prefixed variables for cleaner code.
-
-### ESLint Configuration for React + TypeScript
-
-**Learning**: A proper ESLint config prevents many issues before they reach the test suite.
-
-**Recommended Config** (`.eslintrc.cjs`):
-```javascript
-module.exports = {
-  root: true,
-  env: { browser: true, es2020: true },
-  extends: [
-    'eslint:recommended',
-    'plugin:@typescript-eslint/recommended',
-    'plugin:react-hooks/recommended',
-  ],
-  parser: '@typescript-eslint/parser',
-  rules: {
-    '@typescript-eslint/no-unused-vars': ['warn', { 
-      argsIgnorePattern: '^_',
-      varsIgnorePattern: '^_',
-    }],
-    '@typescript-eslint/no-explicit-any': 'warn',
-  },
-};
-```
-
-**Key Takeaway**: Configure ESLint to allow underscore-prefixed unused variables for intentional cases, and warn (not error) on `any` usage for D3.js interop.
 
 ---
 
-## Conclusion
+## Performance Tips
 
-The key learnings from this project emphasize:
+1. **Batch Database Operations**
+   ```python
+   conn.executemany("INSERT OR REPLACE INTO files ...", files_batch)
+   conn.commit()  # Single commit for batch
+   ```
 
-1. **Safety First**: Always add cycle detection and limits to recursive functions
-2. **Performance Matters**: Memoize expensive operations, limit DOM elements, track performance
-3. **User Experience**: Handle errors gracefully, show helpful messages, prevent perceived freezes
-4. **Code Quality**: Use tree-shaking, lazy loading, and proper cleanup
-5. **Scalability**: Design for large datasets from the start
-6. **Transparency**: Show users what's happening, not just that something is loading
-7. **Context Matters**: Help users understand their data structure, not just display raw paths
-8. **Smart Caching**: Optimize for actual usage patterns (rarely-changing drives) not theoretical worst cases
+2. **Use WAL Mode for SQLite**
+   ```python
+   conn.execute("PRAGMA journal_mode=WAL")
+   ```
 
-These patterns and practices ensure the application remains performant, stable, and maintainable as it scales.
+3. **Progress Callbacks for Long Operations**
+   ```python
+   def crawl(service, progress_callback=None):
+       for i, file in enumerate(files):
+           process(file)
+           if progress_callback and i % 100 == 0:
+               progress_callback(i, len(files))
+   ```
+
+4. **Cache Expensive Computations**
+   - Analytics should be computed once and cached
+   - Use cache metadata to track validity
+
+---
+
+## Future Improvements
+
+- [ ] Add pre-commit hooks for automated linting
+- [ ] Implement database migrations for schema changes
+- [ ] Add retry logic for Google API rate limits
+- [ ] Consider async database operations for better concurrency
+- [ ] Add frontend unit tests with Vitest
