@@ -149,13 +149,19 @@ class TestQuickScanCaching:
 class TestFullScanCaching:
     """Integration tests for full scan caching."""
 
+    @patch("backend.main.get_cache_metadata")
     @patch("backend.main.get_service")
     @patch("backend.main.load_cache")
     @patch("backend.main.validate_cache_with_drive")
     def test_full_scan_uses_cache_when_valid(
-        self, mock_validate, mock_load_cache, mock_get_service, client
+        self, mock_validate, mock_load_cache, mock_get_service, mock_get_metadata, client
     ):
         """Test that full scan uses cache when valid."""
+        # Mock cache metadata to exist
+        mock_get_metadata.return_value = CacheMetadata(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            cache_version=1,
+        )
         # Cache exists and is valid
         cached_data = {
             "data": {

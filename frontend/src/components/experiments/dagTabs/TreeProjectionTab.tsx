@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Folder, File as FileIcon } from 'lucide-react';
+import { Folder, File as FileIcon, Users } from 'lucide-react';
 import type { DagTabProps } from './types';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -47,6 +47,7 @@ export const TreeProjectionTab = ({
     const node = dag.nodesById.get(id);
     if (!node) return false;
     if (filters.foldersOnly && !node.isFolder) return false;
+    if (filters.hideShared && !node.ownedByMe) return false;
     const size = node.file.calculatedSize ?? node.file.size ?? 0;
     if (size < filters.minSizeBytes) return false;
     return true;
@@ -74,9 +75,16 @@ export const TreeProjectionTab = ({
       <FileIcon size={16} className="text-gray-500 flex-shrink-0" />
     );
 
-    const sharedBadge = parentCount > 1 ? (
-      <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 border border-purple-200">
-        shared ×{parentCount}
+    const multiParentBadge = parentCount > 1 ? (
+      <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 text-blue-800 border border-blue-200">
+        ×{parentCount} parents
+      </span>
+    ) : null;
+
+    const sharedWithMeBadge = !node.ownedByMe ? (
+      <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 border border-purple-200 flex items-center gap-0.5">
+        <Users size={10} />
+        shared
       </span>
     ) : null;
 
@@ -106,7 +114,8 @@ export const TreeProjectionTab = ({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <div className="text-sm font-medium truncate">{node.name || '(unnamed)'}</div>
-              {sharedBadge}
+              {sharedWithMeBadge}
+              {multiParentBadge}
             </div>
             <div className="text-xs text-gray-500 truncate">
               id: {node.id} • parents: {parentCount}

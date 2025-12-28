@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
-from .drive_api import list_all_files_full, get_start_page_token
+from .drive_api import list_all_files_full, get_start_page_token, get_my_drive_root
 from .index_db import (
     get_connection,
     get_db_path,
@@ -137,6 +137,16 @@ def run_full_crawl(
         all_files = list_all_files_full(
             service, include_trashed=include_trashed, progress_callback=fetch_progress
         )
+
+        # Inject My Drive root folder so top-level items have a valid parent in the DAG
+        # (files.list doesn't include the root folder itself, but items reference it as parent)
+        root_folder = get_my_drive_root(service)
+        if root_folder:
+            all_files.insert(0, root_folder)
+            crawl_logger.info(
+                "run_full_crawl.root_injected",
+                root_id=root_folder.get("id"),
+            )
 
         progress.total_files = len(all_files)
         crawl_logger.info(

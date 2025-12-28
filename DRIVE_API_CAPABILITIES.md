@@ -4,6 +4,36 @@ This document outlines interesting Google Drive API features that could enhance 
 
 ## 🔍 File Discovery & Search
 
+### 0. **My Drive Root Folder (Critical Gotcha)**
+
+The `files.list()` API does NOT return the "My Drive" root folder, even though top-level items reference it as their parent. This causes orphaned nodes when building a file tree.
+
+```python
+# Fetch the root folder explicitly
+root = service.files().get(
+    fileId='root',  # Special alias for My Drive root
+    fields='id, name, mimeType, parents, createdTime, modifiedTime, ...'
+).execute()
+
+# Result:
+# {
+#   'id': '0AHTI1es55md1Uk9PVA',  # Real ID (not 'root')
+#   'name': 'My Drive',
+#   'mimeType': 'application/vnd.google-apps.folder',
+#   'parents': []  # Empty - this is the true root
+# }
+```
+
+**Why this matters:**
+- Without root injection: Your DAG has hundreds of "root" nodes (orphaned top-level items)
+- With root injection: Single root node, proper parent-child hierarchy
+
+**Implementation:**
+1. Fetch all files with `files.list()`
+2. Fetch root with `files.get(fileId='root')`
+3. Insert root at the beginning of your file list
+4. Build DAG - now top-level items have a valid parent
+
 ### 1. **Find Duplicates via Shortcuts**
 Google Drive shortcuts (introduced in 2020) are special file types (`mimeType='application/vnd.google-apps.shortcut'`) that reference other files. You could:
 - Detect duplicate files by finding shortcuts pointing to the same target

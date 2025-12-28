@@ -5,6 +5,13 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
+class ShortcutDetails(BaseModel):
+    """Details for shortcut files pointing to other files/folders."""
+
+    targetId: str
+    targetMimeType: Optional[str] = None
+
+
 class FileItem(BaseModel):
     """Model for a single file/folder item."""
 
@@ -17,6 +24,10 @@ class FileItem(BaseModel):
     modifiedTime: Optional[str] = None
     webViewLink: Optional[str] = None
     parents: List[str] = Field(default_factory=list)
+    # New fields for duplicate detection
+    md5Checksum: Optional[str] = None  # 32-char hex hash for binary files only
+    shortcutDetails: Optional[ShortcutDetails] = None  # Only for shortcuts
+    ownedByMe: Optional[bool] = None  # Ownership context
 
     model_config = {"populate_by_name": True}
 
@@ -94,6 +105,18 @@ class FullScanStatusResponse(BaseModel):
     status: str  # "running", "complete", "error"
     progress: ScanProgress
     result: Optional[ScanResponse] = None  # Only present when complete
+
+
+class FullScanCacheStatusResponse(BaseModel):
+    """Status/metadata for the full_scan cache without loading the full payload."""
+
+    exists: bool
+    valid: bool
+    timestamp: Optional[str] = None
+    file_count: Optional[int] = None
+    total_size: Optional[int] = None
+    cache_version: Optional[int] = None
+    reason: Optional[str] = None  # e.g. missing | invalid_or_expired | ok
 
 
 class AnalyticsStatusResponse(BaseModel):

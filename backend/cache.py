@@ -68,16 +68,25 @@ def load_cache_metadata(scan_type: str, model: Type[TMeta]) -> Optional[TMeta]:
             with open(meta_path, "r") as f:
                 meta = json.load(f)
             return model(**meta)
-        except Exception:
+        except Exception as e:
             # Fall through to slow path
-            pass
+            cache_logger.debug(
+                "load_cache_metadata",
+                message=f"Sidecar parse failed, falling back to main cache: {e}",
+                scan_type=scan_type,
+            )
 
     cache_data = load_cache(scan_type)
     if not cache_data or "metadata" not in cache_data:
         return None
     try:
         return model(**cache_data["metadata"])
-    except Exception:
+    except Exception as e:
+        cache_logger.warning(
+            "load_cache_metadata",
+            message=f"Failed to parse metadata from cache: {e}",
+            scan_type=scan_type,
+        )
         return None
 
 
@@ -176,9 +185,13 @@ def save_cache(scan_type: str, data: Any, metadata: CacheMetadata) -> bool:
             with open(meta_tmp, "w") as mf:
                 json.dump(metadata.model_dump(), mf, indent=2)
             meta_tmp.replace(meta_path)
-        except Exception:
+        except Exception as e:
             # Sidecar is best-effort; main cache write succeeded
-            pass
+            cache_logger.warning(
+                "save_cache",
+                message=f"Failed to write metadata sidecar (main cache OK): {e}",
+                scan_type=scan_type,
+            )
 
         # Get file size after saving
         file_size_mb = (
@@ -301,6 +314,89 @@ def is_analytics_cache_valid(
         )
     except Exception:
         return False
+
+
+def cache_has_md5_checksum(scan_type: str = "full_scan") -> bool:
+    """
+    Check if the cached data includes md5Checksum fields for duplicate detection.
+    
+    Returns True if the cache has md5Checksum data (or is empty/missing).
+    Returns False if the cache exists but lacks md5Checksum (needs rescan).
+    
+    This is used to detect legacy caches that were created before the
+    FULL_FIELDS update and need to be rescanned to enable verified
+    duplicate detection.
+    """
+    cache_data = load_cache(scan_type)
+    if not cache_data:
+        # No cache = OK (will be created with new fields)
+        return True
+    
+    data = cache_data.get("data")
+    if not data:
+        return True
+    
+    files = data.get("files", [])
+    if not files:
+        return True
+    
+    # Check if any binary file has md5Checksum
+    # Binary files should have md5Checksum if fetched with FULL_FIELDS
+    binary_mime_prefixes = ("image/", "video/", "audio/", "application/pdf", "text/")
+    
+    for f in files[:100]:  # Sample first 100 files for performance
+        mime = f.get("mimeType", "")
+        # Skip folders and Google Workspace files (they don't have md5)
+        if mime == "application/vnd.google-apps.folder":
+            continue
+        if mime.startswith("application/vnd.google-apps."):
+            continue
+        
+        # This is a binary file - should have md5Checksum
+        if any(mime.startswith(prefix) for prefix in binary_mime_prefixes):
+            if f.get("md5Checksum"):
+                # Found md5Checksum - cache is good
+                cache_logger.info(
+                    "cache_has_md5_checksum",
+                    message="Cache has md5Checksum fields",
+                    scan_type=scan_type,
+                )
+                return True
+            else:
+                # Binary file without md5Checksum - cache needs update
+                cache_logger.info(
+                    "cache_has_md5_checksum",
+                    message="Cache missing md5Checksum fields - needs rescan",
+                    scan_type=scan_type,
+                )
+                return False
+    
+    # No binary files found in sample, assume OK
+    return True
+
+
+def invalidate_cache_if_missing_md5(scan_type: str = "full_scan") -> bool:
+    """
+    Check if cache needs to be invalidated due to missing md5Checksum fields.
+    
+    If the cache exists but was created with old fields (missing md5Checksum),
+    it will be cleared to trigger a rescan with FULL_FIELDS.
+    
+    Returns:
+        True if cache was invalidated (or didn't exist)
+        False if cache is valid with md5Checksum fields
+    """
+    if not cache_has_md5_checksum(scan_type):
+        cache_logger.info(
+            "invalidate_cache_if_missing_md5",
+            message=f"Invalidating {scan_type} cache - missing md5Checksum fields",
+        )
+        clear_cache(scan_type)
+        # Also clear analytics cache since it depends on full_scan
+        if scan_type == "full_scan":
+            clear_cache("full_scan_analytics")
+        return True
+    return False
 
 
 def load_full_scan_analytics_cache() -> Optional[Dict[str, Any]]:

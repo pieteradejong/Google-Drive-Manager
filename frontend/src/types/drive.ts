@@ -1,5 +1,11 @@
 /** Type definitions for Google Drive data structures */
 
+/** Shortcut details for files that are shortcuts to other files/folders */
+export interface ShortcutDetails {
+  targetId: string;
+  targetMimeType?: string;
+}
+
 export interface FileItem {
   id: string;
   name: string;
@@ -10,6 +16,40 @@ export interface FileItem {
   modifiedTime?: string;
   webViewLink?: string;
   parents: string[];
+  // New fields for duplicate detection
+  md5Checksum?: string;  // 32-char hex hash, only for binary files
+  shortcutDetails?: ShortcutDetails;  // Only for shortcuts
+  ownedByMe?: boolean;
+  path?: string;  // Computed path from root (e.g., "/Folder/Subfolder")
+  parentFolderId?: string;  // First parent folder ID for navigation
+}
+
+/** Duplicate group with confidence level */
+export interface DuplicateGroup {
+  name: string;
+  size: number;
+  file_ids: string[];
+  count: number;
+  potential_savings: number;
+  confidence: 'verified' | 'potential';
+  checksum?: string;  // Only for verified groups (md5Checksum)
+  mimeType?: string;
+}
+
+/** Response from /api/analytics/view/duplicates */
+export interface DuplicatesAnalyticsResponse {
+  total_groups: number;
+  total_verified_groups: number;
+  total_potential_groups: number;
+  offset: number;
+  limit: number;
+  total_verified_savings: number;
+  total_potential_savings: number;
+  total_savings: number;
+  verified_groups: DuplicateGroup[];
+  potential_groups: DuplicateGroup[];
+  groups: DuplicateGroup[];  // Legacy: combined groups
+  files: FileItem[];  // Enriched with path and parentFolderId
 }
 
 export interface DriveStats {
@@ -58,6 +98,16 @@ export interface FullScanStatusResponse {
   status: 'starting' | 'running' | 'complete' | 'error';
   progress: ScanProgress;
   result?: ScanResponse;
+}
+
+export interface FullScanCacheStatusResponse {
+  exists: boolean;
+  valid: boolean;
+  timestamp?: string;
+  file_count?: number;
+  total_size?: number;
+  cache_version?: number;
+  reason?: string;
 }
 
 export type ViewMode = 'list';

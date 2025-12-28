@@ -159,21 +159,58 @@ markers =
 
 ### Cache Validation Strategy
 
+**Two-Tier Validation Approach:**
+
+1. **Fast TTL-Based Check** (`/api/scan/full/cache/status`)
+   - Reads only sidecar metadata file (no Drive API calls)
+   - Uses time-based validation (30-day TTL)
+   - Returns immediately: `exists`, `valid` (TTL-based), `reason` (`missing | ttl_fresh | ttl_expired`)
+   - Used for instant app-load decisions
+
+2. **Drive-Based Validation** (`/api/scan/full/cache/validate`)
+   - Performs actual Drive API check for file changes
+   - Can be slow (2-3 seconds) but ensures accuracy
+   - Runs in background after cache loads
+   - Returns: `exists`, `valid` (Drive-validated), `reason` (`ok | invalid_or_expired | error:...`)
+
 ```python
-def validate_cache_with_drive(service, metadata, max_api_ttl=300):
-    """
-    Smart cache validation:
-    1. If cache < 5 min old: valid (skip API call)
-    2. Else: check Drive Changes API for modifications
-    """
-    cache_age = (datetime.now(timezone.utc) - parse_timestamp(metadata.timestamp)).total_seconds()
+# Fast status endpoint (no Drive call)
+@app.get("/api/scan/full/cache/status")
+async def get_full_scan_cache_status():
+    meta = get_cache_metadata("full_scan")
+    if not meta:
+        return FullScanCacheStatusResponse(exists=False, valid=False, reason="missing")
     
-    if cache_age < max_api_ttl:
-        return True  # Trust recent cache
-    
-    # Check for changes since cache was created
-    return not check_drive_has_changes(service, metadata.timestamp)
+    # TTL-based check only
+    ttl_valid = is_cache_valid_time_based(meta, max_age_seconds=2592000)
+    return FullScanCacheStatusResponse(
+        exists=True,
+        valid=ttl_valid,
+        reason="ttl_fresh" if ttl_valid else "ttl_expired",
+        # ... metadata fields
+    )
+
+# Drive validation endpoint (can be slow)
+@app.get("/api/scan/full/cache/validate")
+async def validate_full_scan_cache():
+    meta = get_cache_metadata("full_scan")
+    service = get_service()
+    # Performs Drive API check
+    valid = validate_cache_with_drive(service, meta, max_age_seconds=2592000)
+    return FullScanCacheStatusResponse(
+        exists=True,
+        valid=valid,
+        reason="ok" if valid else "invalid_or_expired",
+    )
 ```
+
+**Frontend Cache Hydration Strategy:**
+
+1. On app load, check cache status (fast TTL check)
+2. If cache exists (`exists === true`), load cached data immediately (don't wait for validation)
+3. Run Drive validation in background
+4. Show progress indicators: "Loading cached scan..." → "Validating cache..."
+5. If validation fails, show warning banner with "Run Full Scan" CTA
 
 ### Derived Analytics Cache
 
@@ -254,9 +291,50 @@ def mark_file_removed(conn, file_id):
 | Endpoint | Purpose |
 |----------|---------|
 | `files.list()` | List files with pagination |
+| `files.get(fileId='root')` | Get My Drive root folder (not returned by list!) |
 | `about.get()` | Get storage quota and user info |
 | `changes.getStartPageToken()` | Get token for Changes API |
 | `changes.list()` | Get file changes since token |
+
+### Critical Quirk: My Drive Root Not Returned by files.list()
+
+**Problem:** When you call `files.list()`, Google Drive returns all files and folders EXCEPT the "My Drive" root folder itself. Top-level items reference this root as their parent ID, but the root folder is not in the listing.
+
+**Symptom:** When building a DAG from the file list, you get hundreds of "roots" (items with no known parent) instead of 1.
+
+**Solution:** Explicitly fetch the root folder and inject it into the file list:
+
+```python
+def get_my_drive_root(service) -> Optional[Dict[str, Any]]:
+    """Fetch the My Drive root folder metadata."""
+    try:
+        return service.files().get(fileId="root", fields=SINGLE_FILE_FIELDS).execute()
+    except Exception:
+        return None  # Graceful degradation
+
+# In your scan function:
+all_files = list_all_files_full(service)
+root_folder = get_my_drive_root(service)
+if root_folder:
+    all_files.insert(0, root_folder)  # Root has parents: [], making it the true DAG root
+```
+
+**Result:** DAG now has 1 root (My Drive) instead of 600+ orphaned top-level items.
+
+### Google Drive is a DAG, Not a Tree
+
+Unlike local filesystems (strict trees with one parent per item), Google Drive is a **Directed Acyclic Graph (DAG)**:
+
+| Aspect | Local Filesystem | Google Drive |
+|--------|------------------|--------------|
+| Structure | Tree (one parent) | DAG (multiple parents allowed) |
+| Addressing | Path-based (`/home/user/file.txt`) | ID-based (parent IDs) |
+| Root | Always present (`/` or `C:\`) | Must be fetched separately |
+
+**Implication:** A file can exist in multiple folders simultaneously. Your code should:
+- Store `parents` as an array, not a single value
+- Handle multi-parent files in size calculations (avoid double-counting)
+- Build edges for ALL parent relationships
 
 ### Pagination Pattern
 
@@ -680,6 +758,221 @@ for parent_id in parents:
    - Analytics should be computed once and cached
    - Use cache metadata to track validity
 
+5. **Performance Logging Best Practices**
+   - Use `console.warn()` for slow operations (not `console.error()`)
+   - Only use `console.error()` for actual failures
+   - This prevents "red noise" in DevTools console
+   ```typescript
+   // Good: Warn for slow operations
+   if (duration > THRESHOLDS.VERY_SLOW) {
+     console.warn(`[Performance] ${operationName} took ${duration}ms (VERY SLOW)`);
+   }
+   
+   // Good: Error for failures
+   catch (error) {
+     console.error(`[Performance] ${operationName} failed after ${duration}ms:`, error);
+   }
+   ```
+
+6. **Fast Cache Status Checks**
+   - Use sidecar metadata files for instant cache status (no Drive API calls)
+   - Load cached data immediately, validate in background
+   - This provides instant UI hydration while ensuring data accuracy
+
+---
+
+## Frontend Testing with Vitest
+
+### Setup
+
+Frontend tests use Vitest with jsdom environment:
+
+**`frontend/vitest.config.ts`:**
+```typescript
+import { defineConfig } from 'vitest/config';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+  },
+});
+```
+
+**`frontend/src/test/setup.ts`:**
+```typescript
+import '@testing-library/jest-dom';
+```
+
+### Test Structure
+
+Tests are placed alongside code or in `__tests__` directories:
+```
+frontend/src/utils/__tests__/driveDag.test.ts
+```
+
+### Running Tests
+
+```bash
+# Run once
+cd frontend && npm run test
+
+# Watch mode
+npm run test:watch
+
+# UI mode
+npm run test:ui
+```
+
+### Test Patterns
+
+**1. Type-only tests (verify interface shapes):**
+```typescript
+it('should include ownedByMe in DagNode interface', () => {
+  const dag = buildDriveDag(files);
+  const node = dag.nodesById.get('f1');
+  expect('ownedByMe' in node!).toBe(true);
+});
+```
+
+**2. Behavior tests:**
+```typescript
+it('should default ownedByMe to true when undefined', () => {
+  const files = [createFile({ id: 'f1', name: 'test.txt' })];  // No ownedByMe
+  const dag = buildDriveDag(files);
+  expect(dag.nodesById.get('f1')?.ownedByMe).toBe(true);
+});
+```
+
+---
+
+## Ownership Tracking (ownedByMe)
+
+### Background
+
+Google Drive distinguishes between:
+- **Owned files** (`ownedByMe: true`) - Files you created/uploaded
+- **Shared files** (`ownedByMe: false`) - Files shared with you by others
+
+Shared files often appear as "orphan roots" in the DAG because their parent folders are in another user's Drive (not accessible to you).
+
+### Data Structure
+
+**DagNode (frontend):**
+```typescript
+interface DagNode {
+  id: string;
+  name: string;
+  mimeType: string;
+  isFolder: boolean;
+  ownedByMe: boolean;  // ← Ownership flag
+  parents: string[];
+  children: string[];
+  file: FileItem;
+}
+```
+
+**DagOwnershipStats:**
+```typescript
+interface DagOwnershipStats {
+  ownedCount: number;
+  sharedCount: number;
+  ownedSizeBytes: number;
+  sharedSizeBytes: number;
+}
+```
+
+### Usage in Views
+
+**1. Filter shared files:**
+```typescript
+const myFiles = files.filter(f => f.ownedByMe !== false);
+```
+
+**2. Visual indicator:**
+```typescript
+const sharedBadge = !node.ownedByMe ? (
+  <span className="badge-purple">shared</span>
+) : null;
+```
+
+**3. Toggle in DAG controls:**
+```typescript
+interface DagFilters {
+  hideShared: boolean;  // When true, filter out ownedByMe=false
+  // ...
+}
+```
+
+### Default Behavior
+
+When `ownedByMe` is undefined (legacy data), it defaults to `true`:
+```typescript
+ownedByMe: f.ownedByMe ?? true
+```
+
+This ensures backwards compatibility with cached data that lacks the field.
+
+---
+
+## Frontend Cache Hydration Pattern
+
+### Immediate Cache Loading with Background Validation
+
+The frontend implements a pattern for instant cache hydration while ensuring data accuracy:
+
+**1. Fast Status Check (App Load)**
+```typescript
+// Fast TTL-based check (no Drive API call)
+const { data: cacheStatus } = useQuery({
+  queryKey: ['fullScanCacheStatus'],
+  queryFn: () => api.getFullScanCacheStatus(), // Fast sidecar-only check
+});
+```
+
+**2. Immediate Cache Load**
+```typescript
+// Load cache immediately if it exists (don't wait for validation)
+const shouldFetchCachedFullScan = cacheStatus?.exists === true;
+
+const { data: cachedData, isLoading: isCacheLoading } = useQuery({
+  queryKey: ['fullScanResult'],
+  queryFn: () => api.getCachedFullScan(),
+  enabled: shouldFetchCachedFullScan, // Load when exists, not when valid
+});
+```
+
+**3. Background Validation**
+```typescript
+// Validate in background after cache loads
+const shouldValidateCache = cacheStatus?.exists === true && 
+                            (cachedData !== undefined || cacheStatus?.reason === 'ttl_expired');
+
+const { data: validationStatus, isLoading: isValidatingCache } = useQuery({
+  queryKey: ['fullScanCacheValidation'],
+  queryFn: () => api.validateFullScanCache(), // Drive API validation
+  enabled: shouldValidateCache,
+});
+```
+
+**4. UI Progress Indicators**
+```typescript
+// Show clear progress states
+{isLoadingCachedScan && "Loading cached scan..."}
+{isValidatingCache && "Validating cache..."}
+{cacheWarning && <WarningBanner message={cacheWarning} />}
+```
+
+**Benefits:**
+- Instant UI hydration (no waiting for slow Drive validation)
+- User sees data immediately
+- Background validation ensures accuracy
+- Clear feedback when cache is invalid
+
 ---
 
 ## Future Improvements
@@ -688,4 +981,5 @@ for parent_id in parents:
 - [ ] Implement database migrations for schema changes
 - [ ] Add retry logic for Google API rate limits
 - [ ] Consider async database operations for better concurrency
-- [ ] Add frontend unit tests with Vitest
+- [x] Add frontend unit tests with Vitest
+- [x] Implement fast cache status checks with background validation

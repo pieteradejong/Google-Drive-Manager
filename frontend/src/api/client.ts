@@ -4,7 +4,8 @@ import type {
   ScanResponse, 
   HealthResponse, 
   QuickScanResponse,
-  FullScanStatusResponse 
+  FullScanStatusResponse,
+  FullScanCacheStatusResponse
 } from '../types/drive';
 import { measureAsync } from '../utils/performance';
 
@@ -36,7 +37,7 @@ apiClient.interceptors.response.use(
 
       // Log slow API calls
       if (duration > 2000) {
-        console.error(
+        console.warn(
           `[Performance] API call ${operationName} took ${duration.toFixed(2)}ms (VERY SLOW)`
         );
       } else if (duration > 500) {
@@ -122,6 +123,22 @@ export const api = {
       }
       throw e;
     }
+  },
+
+  /** Fast status check for full scan cache (sidecar-first, TTL-based only) */
+  getFullScanCacheStatus: async (): Promise<FullScanCacheStatusResponse> => {
+    return measureAsync('API: fullScanCacheStatus', async () => {
+      const response = await apiClient.get<FullScanCacheStatusResponse>('/api/scan/full/cache/status');
+      return response.data;
+    }, 200);
+  },
+
+  /** Validate full scan cache against Google Drive (can be slow) */
+  validateFullScanCache: async (): Promise<FullScanCacheStatusResponse> => {
+    return measureAsync('API: validateFullScanCache', async () => {
+      const response = await apiClient.get<FullScanCacheStatusResponse>('/api/scan/full/cache/validate');
+      return response.data;
+    }, 2000); // Higher threshold for Drive validation
   },
 
   /** Derived analytics cache status */

@@ -14,6 +14,7 @@ export type DagTabId =
 
 export interface DagFilters {
   foldersOnly: boolean;
+  hideShared: boolean; // Hide files where ownedByMe = false
   minSizeBytes: number;
   maxDepth: number;
   maxNodes: number;

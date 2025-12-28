@@ -239,6 +239,53 @@ run_api_tests() {
         EXIT_CODE=1
     fi
     
+    echo -e "${CYAN}Testing /api/scan/full/cache/status...${NC}"
+    STATUS_START_TIME=$(date +%s%N)
+    FULL_CACHE_STATUS=$(curl -s http://localhost:8000/api/scan/full/cache/status)
+    STATUS_END_TIME=$(date +%s%N)
+    STATUS_DURATION=$(( (STATUS_END_TIME - STATUS_START_TIME) / 1000000 )) # Convert to milliseconds
+    
+    # Validate JSON shape includes exists + valid
+    if echo "$FULL_CACHE_STATUS" | grep -q '"exists"' && echo "$FULL_CACHE_STATUS" | grep -q '"valid"'; then
+        echo -e "${GREEN}✓ Full scan cache status endpoint working (${STATUS_DURATION}ms)${NC}"
+        FULL_CACHE_EXISTS=$(echo "$FULL_CACHE_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin).get('exists'))" 2>/dev/null || echo "unknown")
+        FULL_CACHE_VALID=$(echo "$FULL_CACHE_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid'))" 2>/dev/null || echo "unknown")
+        FULL_CACHE_REASON=$(echo "$FULL_CACHE_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin).get('reason') or '')" 2>/dev/null || echo "")
+        FULL_CACHE_TS=$(echo "$FULL_CACHE_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin).get('timestamp') or '')" 2>/dev/null || echo "")
+        echo -e "${CYAN}  exists=${FULL_CACHE_EXISTS}, valid=${FULL_CACHE_VALID}, reason=${FULL_CACHE_REASON} ${FULL_CACHE_TS:+, timestamp=${FULL_CACHE_TS}}${NC}"
+        
+        # Verify it's fast (should be < 100ms for sidecar-only check)
+        if [ $STATUS_DURATION -lt 100 ]; then
+            echo -e "${GREEN}  ✓ Status check is fast (sidecar-only, no Drive API call)${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Status check took ${STATUS_DURATION}ms (may be slower than expected)${NC}"
+        fi
+        
+        # Test validate endpoint if cache exists
+        if [ "$FULL_CACHE_EXISTS" = "True" ]; then
+            echo -e "${CYAN}Testing /api/scan/full/cache/validate...${NC}"
+            VALIDATE_START_TIME=$(date +%s%N)
+            FULL_CACHE_VALIDATE=$(curl -s http://localhost:8000/api/scan/full/cache/validate)
+            VALIDATE_END_TIME=$(date +%s%N)
+            VALIDATE_DURATION=$(( (VALIDATE_END_TIME - VALIDATE_START_TIME) / 1000000 )) # Convert to milliseconds
+            
+            if echo "$FULL_CACHE_VALIDATE" | grep -q '"exists"' && echo "$FULL_CACHE_VALIDATE" | grep -q '"valid"'; then
+                echo -e "${GREEN}✓ Full scan cache validate endpoint working (${VALIDATE_DURATION}ms)${NC}"
+                VALIDATE_VALID=$(echo "$FULL_CACHE_VALIDATE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('valid'))" 2>/dev/null || echo "unknown")
+                VALIDATE_REASON=$(echo "$FULL_CACHE_VALIDATE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('reason') or '')" 2>/dev/null || echo "")
+                echo -e "${CYAN}  Drive validation: valid=${VALIDATE_VALID}, reason=${VALIDATE_REASON}${NC}"
+            else
+                echo -e "${RED}✗ Full scan cache validate endpoint failed${NC}"
+                echo -e "${YELLOW}  Response: ${FULL_CACHE_VALIDATE:0:200}...${NC}"
+                EXIT_CODE=1
+            fi
+        fi
+    else
+        echo -e "${RED}✗ Full scan cache status endpoint failed${NC}"
+        echo -e "${YELLOW}  Response: ${FULL_CACHE_STATUS:0:200}...${NC}"
+        EXIT_CODE=1
+    fi
+    
     echo -e "${CYAN}Testing /api/scan/full/start...${NC}"
     START_RESPONSE=$(curl -s -X POST http://localhost:8000/api/scan/full/start)
     if echo "$START_RESPONSE" | grep -q '"scan_id"'; then
@@ -343,10 +390,110 @@ run_cache_tests() {
     echo ""
 }
 
+# Function to run DAG and ownership tests
+run_dag_tests() {
+    echo -e "${BLUE}=== Running DAG & Ownership Tests ===${NC}"
+    
+    # Backend DAG tests
+    if [ -d "venv" ] && [ -f "backend/main.py" ]; then
+        echo -e "${CYAN}Backend DAG integration tests...${NC}"
+        source venv/bin/activate
+        
+        if [ -f "backend/tests/test_dag_root_integration.py" ]; then
+            python -m pytest backend/tests/test_dag_root_integration.py -v --tb=short || EXIT_CODE=1
+        else
+            echo -e "${YELLOW}No backend DAG tests found${NC}"
+        fi
+        
+        deactivate
+    fi
+    
+    # Frontend DAG tests
+    if [ -d "frontend" ] && [ -d "frontend/node_modules" ]; then
+        echo -e "${CYAN}Frontend DAG unit tests...${NC}"
+        cd frontend
+        
+        if [ -f "src/utils/__tests__/driveDag.test.ts" ]; then
+            npm run test -- --run src/utils/__tests__/driveDag.test.ts || EXIT_CODE=1
+        else
+            echo -e "${YELLOW}No frontend DAG tests found${NC}"
+        fi
+        
+        cd ..
+    fi
+    
+    echo ""
+}
+
+# Function to run logger/logging tests
+run_logger_tests() {
+    echo -e "${BLUE}=== Running Logger Tests ===${NC}"
+    
+    # Frontend logger tests
+    if [ -d "frontend" ] && [ -d "frontend/node_modules" ]; then
+        echo -e "${CYAN}Frontend logger unit tests...${NC}"
+        cd frontend
+        
+        if [ -f "src/utils/__tests__/logger.test.ts" ]; then
+            npm run test -- --run src/utils/__tests__/logger.test.ts || EXIT_CODE=1
+        else
+            echo -e "${YELLOW}No frontend logger tests found${NC}"
+        fi
+        
+        cd ..
+    fi
+    
+    # Backend logging tests (auth.py logging, etc.)
+    if [ -d "venv" ] && [ -f "backend/main.py" ]; then
+        echo -e "${CYAN}Backend auth tests (includes logging)...${NC}"
+        source venv/bin/activate
+        
+        if [ -f "backend/tests/test_auth.py" ]; then
+            python -m pytest backend/tests/test_auth.py -v --tb=short || EXIT_CODE=1
+        else
+            echo -e "${YELLOW}No backend auth tests found${NC}"
+        fi
+        
+        deactivate
+    fi
+    
+    echo ""
+}
+
+# Print help message
+print_help() {
+    echo -e "${BLUE}Google Drive Manager Test Suite${NC}"
+    echo ""
+    echo "Usage: $0 [mode]"
+    echo ""
+    echo "Available modes:"
+    echo "  all           Run all tests (default)"
+    echo "  backend       Run backend Python tests"
+    echo "  frontend      Run frontend TypeScript/React tests"
+    echo "  lint          Run linting (flake8, black, eslint)"
+    echo "  type-check    Run type checking (mypy, tsc)"
+    echo "  api           Run API integration tests (requires running backend)"
+    echo "  visualization Run visualization safety tests"
+    echo "  cache         Run cache loading tests"
+    echo "  dag           Run DAG & ownership tests"
+    echo "  logger        Run logger utility tests"
+    echo "  help          Show this help message"
+    echo ""
+    echo "Examples:"
+    echo "  $0              # Run all tests"
+    echo "  $0 backend      # Run only backend tests"
+    echo "  $0 frontend     # Run only frontend tests"
+    echo "  $0 logger       # Run only logger tests"
+}
+
 # Main logic
 MODE=${1:-all}
 
 case $MODE in
+    help|-h|--help)
+        print_help
+        exit 0
+        ;;
     backend)
         run_backend_tests
         ;;
@@ -368,6 +515,12 @@ case $MODE in
     cache)
         run_cache_tests
         ;;
+    dag)
+        run_dag_tests
+        ;;
+    logger)
+        run_logger_tests
+        ;;
     all|*)
         run_backend_tests || true
         run_frontend_tests || true
@@ -376,6 +529,8 @@ case $MODE in
         run_api_tests || true
         run_visualization_tests || true
         run_cache_tests || true
+        run_dag_tests || true
+        run_logger_tests || true
         ;;
 esac
 

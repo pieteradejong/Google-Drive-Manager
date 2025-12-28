@@ -475,11 +475,15 @@ class TestComputeAllAnalytics:
     def test_compute_all_analytics_with_duplicates(
         self, sample_scan_data_with_duplicates
     ):
-        """Test analytics with duplicate files."""
+        """Test analytics with duplicate files (verified by md5Checksum)."""
         result = compute_all_analytics(sample_scan_data_with_duplicates)
 
         assert len(result["duplicates"]["groups"]) >= 1
-        assert result["duplicates"]["total_potential_savings"] > 0
+        # Check total_savings (combines verified + potential) or total_verified_savings
+        total_savings = result["duplicates"].get("total_savings", 0) or \
+                       result["duplicates"].get("total_verified_savings", 0) or \
+                       result["duplicates"].get("total_potential_savings", 0)
+        assert total_savings > 0
 
 
 @pytest.mark.unit

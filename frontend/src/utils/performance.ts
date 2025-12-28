@@ -43,7 +43,7 @@ export async function measureAsync<T>(
 
     // Log based on duration
     if (duration > THRESHOLDS.VERY_SLOW) {
-      console.error(
+      console.warn(
         `[Performance] ${operationName} took ${duration.toFixed(2)}ms (VERY SLOW)`
       );
     } else if (duration > warnThreshold) {
@@ -100,7 +100,7 @@ export function measureSync<T>(
 
     // Log based on duration
     if (duration > THRESHOLDS.VERY_SLOW) {
-      console.error(
+      console.warn(
         `[Performance] ${operationName} took ${duration.toFixed(2)}ms (VERY SLOW - may freeze UI)`
       );
     } else if (duration > warnThreshold) {

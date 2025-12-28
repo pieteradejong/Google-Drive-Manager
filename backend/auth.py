@@ -11,11 +11,16 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 
+from .utils.logger import PerformanceLogger
+
 # Load environment variables from .env file
 load_dotenv()
 
 # Scopes required for Google Drive API
 SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+
+# Auth logger
+auth_logger = PerformanceLogger("auth")
 
 
 def get_credentials_path() -> Path:
@@ -77,22 +82,28 @@ def authenticate() -> build:
 
     # Load existing token if available
     if token_path.exists():
+        auth_logger.info("token_load", message="Loading existing token")
         try:
             with open(token_path, "r") as token:
                 creds_data = json.load(token)
                 creds = Credentials.from_authorized_user_info(creds_data, SCOPES)
+            auth_logger.info("token_load", message="Token loaded successfully")
         except Exception as e:
-            print(f"Error loading token: {e}")
+            auth_logger.error("token_load", message=f"Error loading token: {e}")
             creds = None
+    else:
+        auth_logger.info("token_load", message="No existing token found")
 
     # If no valid credentials, authenticate
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             # Refresh expired token
+            auth_logger.info("token_refresh", message="Token expired, attempting refresh")
             try:
                 creds.refresh(Request())
+                auth_logger.info("token_refresh", message="Token refreshed successfully")
             except Exception as e:
-                print(f"Error refreshing token: {e}")
+                auth_logger.error("token_refresh", message=f"Error refreshing token: {e}")
                 creds = None
 
         if not creds:
@@ -102,17 +113,35 @@ def authenticate() -> build:
 
             if credentials_dict:
                 # Use credentials from environment variables
+                auth_logger.info(
+                    "oauth_flow",
+                    message="Starting OAuth flow using environment variables",
+                )
                 flow = InstalledAppFlow.from_client_secrets_dict(
                     credentials_dict, SCOPES
                 )
                 creds = flow.run_local_server(port=0)
+                auth_logger.info(
+                    "oauth_flow", message="OAuth flow completed (env vars source)"
+                )
             elif credentials_path.exists():
                 # Fall back to credentials.json file
+                auth_logger.info(
+                    "oauth_flow",
+                    message=f"Starting OAuth flow using credentials.json",
+                )
                 flow = InstalledAppFlow.from_client_secrets_file(
                     str(credentials_path), SCOPES
                 )
                 creds = flow.run_local_server(port=0)
+                auth_logger.info(
+                    "oauth_flow", message="OAuth flow completed (file source)"
+                )
             else:
+                auth_logger.error(
+                    "oauth_flow",
+                    message="No credentials found (neither env vars nor credentials.json)",
+                )
                 raise FileNotFoundError(
                     f"Google OAuth credentials not found. "
                     "Please either:\n"
@@ -125,8 +154,10 @@ def authenticate() -> build:
         try:
             with open(token_path, "w") as token:
                 token.write(creds.to_json())
+            auth_logger.info("token_save", message="Token saved successfully")
         except Exception as e:
-            print(f"Warning: Could not save token: {e}")
+            auth_logger.warning("token_save", message=f"Could not save token: {e}")
 
     # Build and return Drive service
+    auth_logger.info("authenticate", message="Building Drive service")
     return build("drive", "v3", credentials=creds)

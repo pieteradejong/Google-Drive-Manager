@@ -7,14 +7,18 @@ from fastapi.middleware.gzip import GZipMiddleware
 from typing import Dict, Any, Optional, List, Tuple
 import uuid
 import time
+import sys
+import os
 from threading import Thread
+from pathlib import Path
 
 from .auth import authenticate
 from .drive_api import (
-    list_all_files,
+    list_all_files_full,
     build_tree_structure,
     get_drive_overview,
     get_top_level_folders,
+    get_my_drive_root,
 )
 from .utils.logger import PerformanceLogger, log_timing, log_operation
 from .models import (
@@ -25,6 +29,7 @@ from .models import (
     QuickScanResponse,
     ScanProgress,
     FullScanStatusResponse,
+    FullScanCacheStatusResponse,
     AnalyticsStatusResponse,
     AnalyticsViewResponse,
 )
@@ -32,11 +37,14 @@ from .cache import (
     load_cache,
     save_cache,
     get_cache_metadata,
+    get_cache_dir,
     CacheMetadata,
     validate_cache_with_drive,
+    is_cache_valid_time_based,
     clear_cache,
     get_full_scan_analytics_metadata,
     is_analytics_cache_valid,
+    invalidate_cache_if_missing_md5,
 )
 from .analytics import save_full_scan_analytics_cache
 
@@ -44,7 +52,51 @@ from .analytics import save_full_scan_analytics_cache
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown events."""
-    # Startup
+    # Log system info
+    perf_logger.info(
+        "startup.system",
+        message=f"Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}",
+    )
+    
+    # Log cache directory status
+    try:
+        cache_dir = get_cache_dir()
+        cache_files = list(cache_dir.glob("*.json")) if cache_dir.exists() else []
+        perf_logger.info(
+            "startup.cache_dir",
+            message=f"Cache directory: {cache_dir}",
+            exists=cache_dir.exists(),
+            file_count=len(cache_files),
+        )
+        
+        # Log existing cache status
+        quick_scan_meta = get_cache_metadata("quick_scan")
+        full_scan_meta = get_cache_metadata("full_scan")
+        perf_logger.info(
+            "startup.cache_status",
+            message="Checking existing caches",
+            quick_scan_exists=quick_scan_meta is not None,
+            full_scan_exists=full_scan_meta is not None,
+            full_scan_file_count=full_scan_meta.file_count if full_scan_meta else None,
+        )
+    except Exception as e:
+        perf_logger.warning(
+            "startup.cache_dir",
+            message=f"Error checking cache directory: {str(e)}",
+        )
+
+    # Log credentials configuration
+    has_env_creds = bool(os.getenv("GOOGLE_CLIENT_ID") and os.getenv("GOOGLE_CLIENT_SECRET"))
+    creds_file_path = Path(__file__).parent.parent / "credentials.json"
+    has_file_creds = creds_file_path.exists()
+    perf_logger.info(
+        "startup.credentials",
+        message="Checking credentials sources",
+        env_vars_configured=has_env_creds,
+        credentials_file_exists=has_file_creds,
+    )
+    
+    # Initialize Drive service
     try:
         get_service()
         log_operation("startup.service_init", logger_name="main", status="success")
@@ -58,8 +110,26 @@ async def lifespan(app: FastAPI):
             "startup.service_init",
             message=f"Could not initialize Drive service: {str(e)}",
         )
+    
+    # Check if existing cache needs to be invalidated due to missing md5Checksum
+    # (caches created before the FULL_FIELDS update need rescan for duplicate detection)
+    try:
+        if invalidate_cache_if_missing_md5("full_scan"):
+            perf_logger.info(
+                "startup.cache_migration",
+                message="Full scan cache invalidated - missing md5Checksum fields. A new scan will fetch full metadata for duplicate detection.",
+            )
+    except Exception as e:
+        perf_logger.warning(
+            "startup.cache_migration",
+            message=f"Error checking cache for md5Checksum fields: {str(e)}",
+        )
+    
+    perf_logger.info("startup.complete", message="Server startup complete")
+    
     yield
-    # Shutdown (nothing to clean up currently)
+    # Shutdown
+    perf_logger.info("shutdown", message="Server shutting down")
 
 
 app = FastAPI(
@@ -259,8 +329,15 @@ async def scan_drive() -> ScanResponse:
 
         print("Step 2/4: Fetching all files from Google Drive...")
         print("  (This may take a while for large drives)")
-        # Fetch all files
-        all_files = list_all_files(service)
+        # Fetch all files with full metadata including md5Checksum for duplicate detection
+        all_files = list_all_files_full(service)
+
+        # Inject My Drive root folder so top-level items have a valid parent in the DAG
+        root_folder = get_my_drive_root(service)
+        if root_folder:
+            all_files.insert(0, root_folder)
+            print(f"✓ Injected My Drive root folder ({root_folder.get('id')})")
+
         print(f"✓ Fetched {len(all_files)} files/folders")
 
         if not all_files:
@@ -364,15 +441,27 @@ def run_full_scan(scan_id: str):
         log_operation("full_scan.start", logger_name="main", scan_id=scan_id)
         _scan_states[scan_id]["status"] = "running"
         _scan_states[scan_id]["progress"] = ScanProgress(
-            scan_id=scan_id, stage="fetching", progress=0.0, message="Starting scan..."
+            scan_id=scan_id, stage="fetching", progress=0.0, message="Connecting to Google Drive API..."
         )
 
         service = get_service()
 
         # Fetch all files with progress updates
-        # Note: list_all_files() now has its own timing, but we still track overall fetch time
+        # Note: list_all_files_full() includes md5Checksum for verified duplicate detection
         fetch_start = time.perf_counter()
-        all_files = list_all_files(service)
+        all_files = list_all_files_full(service)
+
+        # Inject My Drive root folder so top-level items have a valid parent in the DAG
+        # (files.list doesn't include the root folder itself, but items reference it as parent)
+        root_folder = get_my_drive_root(service)
+        if root_folder:
+            all_files.insert(0, root_folder)
+            perf_logger.info(
+                "full_scan.root_injected",
+                root_id=root_folder.get("id"),
+                scan_id=scan_id,
+            )
+
         fetch_duration_ms = (time.perf_counter() - fetch_start) * 1000
 
         # Update progress after fetching
@@ -381,7 +470,7 @@ def run_full_scan(scan_id: str):
             stage="fetching",
             progress=50.0,
             files_fetched=len(all_files),
-            message=f"Fetched {len(all_files)} files...",
+            message=f"Downloaded metadata for {len(all_files):,} files (names, sizes, dates - no file contents transferred)",
         )
 
         fetch_duration_ms = (time.perf_counter() - fetch_start) * 1000
@@ -398,7 +487,7 @@ def run_full_scan(scan_id: str):
             stage="building_tree",
             progress=50.0,
             files_fetched=len(all_files),
-            message="Building folder structure...",
+            message=f"Organizing {len(all_files):,} files into folder hierarchy and mapping parent-child relationships...",
         )
 
         # Build tree structure
@@ -418,7 +507,7 @@ def run_full_scan(scan_id: str):
             stage="calculating_sizes",
             progress=75.0,
             files_fetched=len(all_files),
-            message="Calculating folder sizes...",
+            message="Computing folder sizes by summing nested files (Google Drive doesn't store folder sizes natively)...",
         )
 
         # Calculate statistics
@@ -450,14 +539,23 @@ def run_full_scan(scan_id: str):
             files=file_items, children_map=tree_data["children_map"], stats=stats
         )
 
-        # Mark as complete
+        # Mark as complete - format size for human readability
+        def format_size(size_bytes: int) -> str:
+            if size_bytes >= 1024**3:
+                return f"{size_bytes / (1024**3):.1f} GB"
+            elif size_bytes >= 1024**2:
+                return f"{size_bytes / (1024**2):.1f} MB"
+            elif size_bytes >= 1024:
+                return f"{size_bytes / 1024:.1f} KB"
+            return f"{size_bytes} bytes"
+
         _scan_states[scan_id]["status"] = "complete"
         _scan_states[scan_id]["progress"] = ScanProgress(
             scan_id=scan_id,
             stage="complete",
             progress=100.0,
             files_fetched=len(all_files),
-            message="Scan complete!",
+            message=f"Complete! Indexed {stats.total_files:,} items ({stats.folder_count:,} folders, {stats.file_count:,} files) totaling {format_size(stats.total_size)}",
         )
         _scan_states[scan_id]["result"] = result
 
@@ -490,8 +588,11 @@ def run_full_scan(scan_id: str):
         # Kick off analytics computation in background (best-effort)
         try:
             start_analytics_compute_if_needed()
-        except Exception:
-            pass
+        except Exception as e:
+            perf_logger.warning(
+                "full_scan.analytics",
+                message=f"Failed to start analytics compute after scan: {str(e)}",
+            )
 
     except OSError as e:
         # Network-related errors
@@ -559,42 +660,47 @@ async def start_full_scan() -> Dict[str, str]:
         Dictionary with scan_id to poll for status
     """
     try:
-        # Check cache first
-        cache_data = load_cache("full_scan")
-        if cache_data:
-            metadata = CacheMetadata(**cache_data["metadata"])
+        # Check cache metadata first (fast; avoids loading huge cache JSON unless valid)
+        metadata = get_cache_metadata("full_scan")
+        if metadata:
             service = get_service()
             # Full scan uses smart validation: 30 days initial TTL + Drive API check
             # Since files rarely change, cache can persist indefinitely until files actually change
             if validate_cache_with_drive(
                 service, metadata, max_age_seconds=2592000
             ):  # 30 days initial TTL
-                # Create a scan_id and immediately mark as complete with cached result
-                scan_id = str(uuid.uuid4())
-                log_operation(
-                    "full_scan.cache_hit", logger_name="main", scan_id=scan_id
-                )
-                cached_response = cache_data["data"]
-                result = ScanResponse(**cached_response)
+                # Load cached payload only when we know it's valid
+                cache_data = load_cache("full_scan")
+                if cache_data:
+                    # Create a scan_id and immediately mark as complete with cached result
+                    scan_id = str(uuid.uuid4())
+                    log_operation(
+                        "full_scan.cache_hit", logger_name="main", scan_id=scan_id
+                    )
+                    cached_response = cache_data["data"]
+                    result = ScanResponse(**cached_response)
 
-                # Initialize scan state as complete
-                _scan_states[scan_id] = {
-                    "status": "complete",
-                    "progress": ScanProgress(
-                        scan_id=scan_id,
-                        stage="complete",
-                        progress=100.0,
-                        files_fetched=result.stats.total_files,
-                        message="Scan complete! (from cache)",
-                    ),
-                    "result": result,
-                }
-                # If analytics cache is missing/outdated, kick it off in background
-                try:
-                    start_analytics_compute_if_needed()
-                except Exception:
-                    pass
-                return {"scan_id": scan_id}
+                    # Initialize scan state as complete
+                    _scan_states[scan_id] = {
+                        "status": "complete",
+                        "progress": ScanProgress(
+                            scan_id=scan_id,
+                            stage="complete",
+                            progress=100.0,
+                            files_fetched=result.stats.total_files,
+                            message="Scan complete! (from cache)",
+                        ),
+                        "result": result,
+                    }
+                    # If analytics cache is missing/outdated, kick it off in background
+                    try:
+                        start_analytics_compute_if_needed()
+                    except Exception as e:
+                        perf_logger.warning(
+                            "full_scan.cache_hit.analytics",
+                            message=f"Failed to start analytics compute: {str(e)}",
+                        )
+                    return {"scan_id": scan_id}
             else:
                 log_operation(
                     "full_scan.cache_miss",
@@ -664,11 +770,11 @@ async def get_cached_full_scan() -> ScanResponse:
         404: No valid cache available
     """
     try:
-        cache_data = load_cache("full_scan")
-        if not cache_data:
+        # Fast path: read sidecar metadata first (avoid loading huge JSON unless valid)
+        metadata = get_cache_metadata("full_scan")
+        if not metadata:
             raise HTTPException(status_code=404, detail="No cached data available")
 
-        metadata = CacheMetadata(**cache_data["metadata"])
         service = get_service()
 
         # Validate cache using same logic as start_full_scan
@@ -677,11 +783,19 @@ async def get_cached_full_scan() -> ScanResponse:
         ):  # 30 days
             raise HTTPException(status_code=404, detail="Cache expired or invalid")
 
+        # Only load the full cached payload if it's valid
+        cache_data = load_cache("full_scan")
+        if not cache_data:
+            raise HTTPException(status_code=404, detail="Cache unavailable")
+
         # Kick off analytics compute if needed (background)
         try:
             start_analytics_compute_if_needed()
-        except Exception:
-            pass
+        except Exception as e:
+            perf_logger.warning(
+                "get_cached_full_scan",
+                message=f"Failed to start analytics compute: {str(e)}",
+            )
 
         return ScanResponse(**cache_data["data"])
 
@@ -692,6 +806,78 @@ async def get_cached_full_scan() -> ScanResponse:
             "get_cached_full_scan", message=f"Error loading cache: {str(e)}"
         )
         raise HTTPException(status_code=404, detail="Cache unavailable")
+
+
+@app.get("/api/scan/full/cache/status", response_model=FullScanCacheStatusResponse)
+async def get_full_scan_cache_status() -> FullScanCacheStatusResponse:
+    """
+    Return full_scan cache existence + TTL-based validity without loading the full cached payload.
+
+    This is designed for very fast app-load decisions:
+    - Reads only the sidecar metadata file (tiny)
+    - Uses time-based validation only (no Drive API calls)
+    - Returns reason: missing | ttl_fresh | ttl_expired
+
+    For Drive-based validation, use /api/scan/full/cache/validate endpoint.
+    """
+    meta = get_cache_metadata("full_scan")
+    if not meta:
+        return FullScanCacheStatusResponse(exists=False, valid=False, reason="missing")
+
+    # Fast TTL-based check only (no Drive API call)
+    max_age_seconds = 2592000  # 30 days
+    ttl_valid = is_cache_valid_time_based(meta, max_age_seconds)
+    
+    return FullScanCacheStatusResponse(
+        exists=True,
+        valid=ttl_valid,
+        timestamp=meta.timestamp,
+        file_count=meta.file_count,
+        total_size=meta.total_size,
+        cache_version=meta.cache_version,
+        reason="ttl_fresh" if ttl_valid else "ttl_expired",
+    )
+
+
+@app.get("/api/scan/full/cache/validate", response_model=FullScanCacheStatusResponse)
+async def validate_full_scan_cache() -> FullScanCacheStatusResponse:
+    """
+    Validate full_scan cache against Google Drive (checks for file changes).
+
+    This endpoint performs Drive API validation which can be slow.
+    Use /api/scan/full/cache/status for fast TTL-based checks.
+
+    Returns:
+        FullScanCacheStatusResponse with Drive-validated status
+    """
+    meta = get_cache_metadata("full_scan")
+    if not meta:
+        return FullScanCacheStatusResponse(exists=False, valid=False, reason="missing")
+
+    try:
+        service = get_service()
+        max_age_seconds = 2592000  # 30 days
+        valid = validate_cache_with_drive(service, meta, max_age_seconds=max_age_seconds)
+        return FullScanCacheStatusResponse(
+            exists=True,
+            valid=bool(valid),
+            timestamp=meta.timestamp,
+            file_count=meta.file_count,
+            total_size=meta.total_size,
+            cache_version=meta.cache_version,
+            reason="ok" if valid else "invalid_or_expired",
+        )
+    except Exception as e:
+        # If we can't validate (e.g. auth/network), report existence but invalid
+        return FullScanCacheStatusResponse(
+            exists=True,
+            valid=False,
+            timestamp=meta.timestamp,
+            file_count=meta.file_count,
+            total_size=meta.total_size,
+            cache_version=meta.cache_version,
+            reason=f"error:{str(e)}",
+        )
 
 
 @app.get("/api/scan/full/status/{scan_id}", response_model=FullScanStatusResponse)
@@ -947,11 +1133,22 @@ async def analytics_view(
     # Basic routing
     if view == "duplicates":
         duplicates = data.get("duplicates") or {}
-        groups = duplicates.get("groups") or []
-        total_groups = len(groups)
-        page = groups[offset : offset + limit]
+        
+        # Get both verified and potential groups (new format)
+        verified_groups = duplicates.get("verified_groups") or []
+        potential_groups = duplicates.get("potential_groups") or []
+        # Fallback to legacy 'groups' if new format not available
+        all_groups = duplicates.get("groups") or (verified_groups + potential_groups)
+        
+        total_verified = len(verified_groups)
+        total_potential = len(potential_groups)
+        total_groups = len(all_groups)
+        
+        # Paginate the combined groups (verified first, then potential)
+        page = all_groups[offset : offset + limit]
 
         scan_data, file_by_id = _build_file_index_from_full_scan()
+        children_map = scan_data.get("children_map") or {}
 
         # Build minimal file objects and computed paths for returned file ids only
         file_ids = []
@@ -964,6 +1161,10 @@ async def analytics_view(
             f = file_by_id.get(fid)
             if not f:
                 continue
+            # Get parent folder ID for navigation
+            parents = f.get("parents") or []
+            parent_folder_id = parents[0] if parents else None
+            
             files_out.append(
                 {
                     "id": f.get("id"),
@@ -973,17 +1174,25 @@ async def analytics_view(
                     "createdTime": f.get("createdTime"),
                     "modifiedTime": f.get("modifiedTime"),
                     "webViewLink": f.get("webViewLink"),
-                    "parents": f.get("parents") or [],
+                    "parents": parents,
                     "path": _path_for(fid, file_by_id),
+                    "md5Checksum": f.get("md5Checksum"),  # For verified duplicate info
+                    "parentFolderId": parent_folder_id,  # For DAG navigation
                 }
             )
 
         payload = {
             "total_groups": total_groups,
+            "total_verified_groups": total_verified,
+            "total_potential_groups": total_potential,
             "offset": offset,
             "limit": limit,
+            "total_verified_savings": duplicates.get("total_verified_savings") or 0,
             "total_potential_savings": duplicates.get("total_potential_savings") or 0,
-            "groups": page,
+            "total_savings": duplicates.get("total_savings") or duplicates.get("total_potential_savings") or 0,
+            "verified_groups": verified_groups[:limit],  # Return up to limit verified groups
+            "potential_groups": potential_groups[:limit],  # Return up to limit potential groups
+            "groups": page,  # Legacy: combined paginated groups
             "files": files_out,
         }
         etag = _etag_for(

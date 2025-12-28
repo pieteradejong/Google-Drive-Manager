@@ -18,6 +18,7 @@ export type ExperimentType =
   | 'folder-depth'
   | 'activity-timeline'
   | 'shared-files'
+  | 'shared-with-me'
   | 'orphaned-files'
   | 'folder-tree'
   | 'semantic-analysis'

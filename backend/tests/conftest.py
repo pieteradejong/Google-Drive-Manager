@@ -319,13 +319,14 @@ def sample_files_full():
 
 @pytest.fixture
 def sample_files_with_duplicates():
-    """Sample files with duplicates for analytics testing."""
+    """Sample files with duplicates for analytics testing (with md5Checksum for verified detection)."""
     return [
         {
             "id": "dup1_a",
             "name": "Report.pdf",
             "mimeType": "application/pdf",
             "size": "5000",
+            "md5Checksum": "abc123def456789012345678901234ab",  # Same hash for duplicates
             "parents": ["folder_work"],
             "createdTime": "2024-01-01T00:00:00Z",
             "modifiedTime": "2024-01-01T00:00:00Z",
@@ -335,6 +336,7 @@ def sample_files_with_duplicates():
             "name": "Report.pdf",
             "mimeType": "application/pdf",
             "size": "5000",
+            "md5Checksum": "abc123def456789012345678901234ab",  # Same hash for duplicates
             "parents": ["folder_backup"],
             "createdTime": "2024-01-02T00:00:00Z",
             "modifiedTime": "2024-01-02T00:00:00Z",
@@ -344,6 +346,7 @@ def sample_files_with_duplicates():
             "name": "Report.pdf",
             "mimeType": "application/pdf",
             "size": "5000",
+            "md5Checksum": "abc123def456789012345678901234ab",  # Same hash for duplicates
             "parents": ["folder_old"],
             "createdTime": "2024-01-03T00:00:00Z",
             "modifiedTime": "2024-01-03T00:00:00Z",
@@ -353,6 +356,7 @@ def sample_files_with_duplicates():
             "name": "UniqueFile.txt",
             "mimeType": "text/plain",
             "size": "100",
+            "md5Checksum": "unique1234567890123456789012345ef",  # Unique hash
             "parents": [],
             "createdTime": "2024-01-01T00:00:00Z",
             "modifiedTime": "2024-01-01T00:00:00Z",
@@ -724,3 +728,259 @@ def expired_cache_metadata():
         total_size=1048576,
         cache_version=1,
     )
+
+
+# =============================================================================
+# My Drive Root Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def mock_my_drive_root():
+    """
+    Mock My Drive root folder as returned by files.get(fileId='root').
+
+    The root folder is a special container that isn't returned by files.list(),
+    but is referenced as the parent of top-level items.
+    """
+    return {
+        "id": "0AHTI1es55md1Uk9PVA",  # Real-looking root ID format
+        "name": "My Drive",
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [],  # Root has no parents - this makes it the DAG root
+        "trashed": False,
+        "createdTime": "2020-01-01T00:00:00.000Z",
+        "modifiedTime": "2024-01-01T00:00:00.000Z",
+        "ownedByMe": True,
+        "owners": [
+            {"displayName": "Test User", "emailAddress": "test@example.com"}
+        ],
+        "capabilities": {
+            "canAddChildren": True,
+            "canRemoveChildren": True,
+            "canTrash": False,
+            "canDelete": False,
+        },
+        "starred": False,
+        "webViewLink": "https://drive.google.com/drive/my-drive",
+    }
+
+
+@pytest.fixture
+def sample_files_with_missing_root(mock_my_drive_root):
+    """
+    Sample files that reference the root folder as their parent.
+
+    Without root injection, these files would appear as orphans/roots
+    because their parent ID is not in the dataset.
+    """
+    root_id = mock_my_drive_root["id"]
+    return [
+        {
+            "id": "folder_personal",
+            "name": "Personal",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [root_id],
+            "trashed": False,
+            "createdTime": "2024-01-01T00:00:00Z",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+            "ownedByMe": True,
+        },
+        {
+            "id": "folder_work",
+            "name": "Work",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [root_id],
+            "trashed": False,
+            "createdTime": "2024-01-01T00:00:00Z",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+            "ownedByMe": True,
+        },
+        {
+            "id": "file_in_personal",
+            "name": "notes.txt",
+            "mimeType": "text/plain",
+            "size": "1024",
+            "parents": ["folder_personal"],
+            "trashed": False,
+            "createdTime": "2024-01-02T00:00:00Z",
+            "modifiedTime": "2024-01-02T00:00:00Z",
+            "ownedByMe": True,
+        },
+        {
+            "id": "file_in_work",
+            "name": "report.pdf",
+            "mimeType": "application/pdf",
+            "size": "2048",
+            "parents": ["folder_work"],
+            "trashed": False,
+            "createdTime": "2024-01-03T00:00:00Z",
+            "modifiedTime": "2024-01-03T00:00:00Z",
+            "ownedByMe": True,
+        },
+    ]
+
+
+@pytest.fixture
+def sample_files_with_root(mock_my_drive_root, sample_files_with_missing_root):
+    """
+    Sample files WITH the root folder included.
+
+    This represents the expected state after root injection.
+    """
+    return [mock_my_drive_root] + sample_files_with_missing_root
+
+
+# =============================================================================
+# Shared Files (ownedByMe = false) Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def sample_shared_files():
+    """
+    Sample files shared with the user (ownedByMe = false).
+
+    These files are owned by others and shared with the current user.
+    They often appear as orphan roots because their parent folders
+    are not in the user's dataset.
+    """
+    return [
+        {
+            "id": "shared_doc_1",
+            "name": "Team Report.pdf",
+            "mimeType": "application/pdf",
+            "size": "5000",
+            "parents": [],  # No parent = orphan root
+            "trashed": False,
+            "createdTime": "2024-01-01T00:00:00Z",
+            "modifiedTime": "2024-01-15T00:00:00Z",
+            "ownedByMe": False,
+            "owners": [
+                {"displayName": "Alice Smith", "emailAddress": "alice@company.com"}
+            ],
+            "capabilities": {
+                "canEdit": True,
+                "canTrash": False,
+                "canDelete": False,
+            },
+        },
+        {
+            "id": "shared_folder_1",
+            "name": "Shared Projects",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [],  # Top-level shared folder
+            "trashed": False,
+            "createdTime": "2024-01-01T00:00:00Z",
+            "modifiedTime": "2024-01-20T00:00:00Z",
+            "ownedByMe": False,
+            "owners": [
+                {"displayName": "Bob Jones", "emailAddress": "bob@company.com"}
+            ],
+            "capabilities": {
+                "canAddChildren": True,
+                "canRemoveChildren": False,
+            },
+        },
+        {
+            "id": "shared_file_in_folder",
+            "name": "Presentation.pptx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "size": "10000",
+            "parents": ["shared_folder_1"],
+            "trashed": False,
+            "createdTime": "2024-01-05T00:00:00Z",
+            "modifiedTime": "2024-01-10T00:00:00Z",
+            "ownedByMe": False,
+            "owners": [
+                {"displayName": "Bob Jones", "emailAddress": "bob@company.com"}
+            ],
+            "capabilities": {
+                "canEdit": False,  # View only
+            },
+        },
+    ]
+
+
+@pytest.fixture
+def sample_mixed_ownership_files(mock_my_drive_root, sample_shared_files):
+    """
+    Mix of owned and shared files for testing ownership separation.
+
+    Combines My Drive root, owned files, and shared files.
+    """
+    root_id = mock_my_drive_root["id"]
+    owned_files = [
+        {
+            "id": "my_folder_1",
+            "name": "My Documents",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [root_id],
+            "trashed": False,
+            "createdTime": "2024-01-01T00:00:00Z",
+            "modifiedTime": "2024-01-01T00:00:00Z",
+            "ownedByMe": True,
+            "owners": [
+                {"displayName": "Test User", "emailAddress": "test@example.com"}
+            ],
+        },
+        {
+            "id": "my_file_1",
+            "name": "My Notes.txt",
+            "mimeType": "text/plain",
+            "size": "500",
+            "parents": ["my_folder_1"],
+            "trashed": False,
+            "createdTime": "2024-01-02T00:00:00Z",
+            "modifiedTime": "2024-01-02T00:00:00Z",
+            "ownedByMe": True,
+            "owners": [
+                {"displayName": "Test User", "emailAddress": "test@example.com"}
+            ],
+        },
+        {
+            "id": "my_file_2",
+            "name": "Budget.xlsx",
+            "mimeType": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "size": "2000",
+            "parents": [root_id],
+            "trashed": False,
+            "createdTime": "2024-01-03T00:00:00Z",
+            "modifiedTime": "2024-01-03T00:00:00Z",
+            "ownedByMe": True,
+            "owners": [
+                {"displayName": "Test User", "emailAddress": "test@example.com"}
+            ],
+        },
+    ]
+    return [mock_my_drive_root] + owned_files + sample_shared_files
+
+
+@pytest.fixture
+def sample_files_undefined_ownership():
+    """
+    Files without ownedByMe field (legacy data).
+
+    These should be treated as owned by default.
+    """
+    return [
+        {
+            "id": "legacy_file_1",
+            "name": "OldFile.doc",
+            "mimeType": "application/msword",
+            "size": "1000",
+            "parents": [],
+            "createdTime": "2020-01-01T00:00:00Z",
+            "modifiedTime": "2020-06-01T00:00:00Z",
+            # Note: ownedByMe is NOT present
+        },
+        {
+            "id": "legacy_folder_1",
+            "name": "Archive",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [],
+            "createdTime": "2019-01-01T00:00:00Z",
+            "modifiedTime": "2019-12-01T00:00:00Z",
+            # Note: ownedByMe is NOT present
+        },
+    ]

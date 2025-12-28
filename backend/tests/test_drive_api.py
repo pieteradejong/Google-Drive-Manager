@@ -13,8 +13,10 @@ from backend.drive_api import (
     get_start_page_token,
     list_changes,
     get_file_metadata,
+    get_my_drive_root,
     FULL_FIELDS,
     CHANGES_FIELDS,
+    SINGLE_FILE_FIELDS,
 )
 
 
@@ -642,3 +644,94 @@ class TestGetFileMetadata:
         service.files.return_value.get.assert_called_once_with(
             fileId="file123", fields="*"
         )
+
+
+@pytest.mark.unit
+class TestGetMyDriveRoot:
+    """Tests for get_my_drive_root function."""
+
+    def test_get_my_drive_root_success(self, mock_my_drive_root):
+        """Test successful root folder retrieval."""
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.return_value = (
+            mock_my_drive_root
+        )
+
+        result = get_my_drive_root(service)
+
+        assert result is not None
+        assert result["id"] == mock_my_drive_root["id"]
+        assert result["name"] == "My Drive"
+        assert result["mimeType"] == "application/vnd.google-apps.folder"
+        assert result["parents"] == []  # Root has no parents
+
+    def test_get_my_drive_root_uses_root_alias(self, mock_my_drive_root):
+        """Test that 'root' alias is used in the API call."""
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.return_value = (
+            mock_my_drive_root
+        )
+
+        get_my_drive_root(service)
+
+        # Verify files.get was called with fileId='root'
+        call_kwargs = service.files.return_value.get.call_args[1]
+        assert call_kwargs["fileId"] == "root"
+
+    def test_get_my_drive_root_uses_single_file_fields(self, mock_my_drive_root):
+        """Test that proper fields are requested."""
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.return_value = (
+            mock_my_drive_root
+        )
+
+        get_my_drive_root(service)
+
+        call_kwargs = service.files.return_value.get.call_args[1]
+        assert call_kwargs["fields"] == SINGLE_FILE_FIELDS
+
+    def test_get_my_drive_root_api_error_returns_none(self):
+        """Test graceful degradation when API fails."""
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.side_effect = Exception(
+            "API Error: File not found"
+        )
+
+        result = get_my_drive_root(service)
+
+        # Should return None instead of raising (graceful degradation)
+        assert result is None
+
+    def test_get_my_drive_root_permission_error_returns_none(self):
+        """Test graceful degradation on permission errors."""
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.side_effect = Exception(
+            "HttpError 403: The user does not have permission"
+        )
+
+        result = get_my_drive_root(service)
+
+        assert result is None
+
+    def test_get_my_drive_root_returns_folder_type(self, mock_my_drive_root):
+        """Test that root is always a folder."""
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.return_value = (
+            mock_my_drive_root
+        )
+
+        result = get_my_drive_root(service)
+
+        assert result["mimeType"] == "application/vnd.google-apps.folder"
+
+    def test_get_my_drive_root_has_empty_parents(self, mock_my_drive_root):
+        """Test that root folder has no parents (making it a DAG root)."""
+        service = MagicMock()
+        service.files.return_value.get.return_value.execute.return_value = (
+            mock_my_drive_root
+        )
+
+        result = get_my_drive_root(service)
+
+        # Root should have empty parents - this is what makes it the DAG root
+        assert result["parents"] == []

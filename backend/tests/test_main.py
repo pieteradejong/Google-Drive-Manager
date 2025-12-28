@@ -1,7 +1,7 @@
 """Tests for backend/main.py API endpoints."""
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 from starlette.testclient import TestClient
 from backend import main
@@ -32,15 +32,17 @@ class TestScanEndpoint:
     """Tests for /api/scan endpoint."""
 
     @patch("backend.main.get_service")
-    @patch("backend.main.list_all_files")
+    @patch("backend.main.list_all_files_full")
     @patch("backend.main.build_tree_structure")
+    @patch("backend.main.get_my_drive_root")
     async def test_scan_endpoint_success(
-        self, mock_build_tree, mock_list_files, mock_get_service, client, sample_files
+        self, mock_get_root, mock_build_tree, mock_list_files, mock_get_service, client, sample_files
     ):
         """Test successful scan endpoint."""
         # Setup mocks
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
+        mock_get_root.return_value = None  # No root injection for simpler test
 
         # Create copy to avoid modifying fixture
         files_copy = [f.copy() for f in sample_files]
@@ -73,14 +75,16 @@ class TestScanEndpoint:
         assert data["stats"]["file_count"] == 3
 
     @patch("backend.main.get_service")
-    @patch("backend.main.list_all_files")
+    @patch("backend.main.list_all_files_full")
     @patch("backend.main.build_tree_structure")
+    @patch("backend.main.get_my_drive_root")
     def test_scan_endpoint_empty_drive(
-        self, mock_build_tree, mock_list_files, mock_get_service, client
+        self, mock_get_root, mock_build_tree, mock_list_files, mock_get_service, client
     ):
         """Test scan endpoint with empty Drive."""
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
+        mock_get_root.return_value = None
         mock_list_files.return_value = []
         mock_build_tree.return_value = {"files": [], "file_map": {}, "children_map": {}}
 
@@ -106,7 +110,7 @@ class TestScanEndpoint:
         assert "credentials" in detail.lower() or "authentication" in detail.lower()
 
     @patch("backend.main.get_service")
-    @patch("backend.main.list_all_files")
+    @patch("backend.main.list_all_files_full")
     def test_scan_endpoint_api_error(self, mock_list_files, mock_get_service, client):
         """Test scan endpoint handles API errors."""
         mock_service = MagicMock()
@@ -120,14 +124,16 @@ class TestScanEndpoint:
         assert "Error scanning Drive" in data["detail"]
 
     @patch("backend.main.get_service")
-    @patch("backend.main.list_all_files")
+    @patch("backend.main.list_all_files_full")
     @patch("backend.main.build_tree_structure")
+    @patch("backend.main.get_my_drive_root")
     def test_scan_endpoint_calculates_stats_correctly(
-        self, mock_build_tree, mock_list_files, mock_get_service, client, sample_files
+        self, mock_get_root, mock_build_tree, mock_list_files, mock_get_service, client, sample_files
     ):
         """Test that scan endpoint calculates statistics correctly."""
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
+        mock_get_root.return_value = None
 
         # Create a copy to avoid modifying the fixture
         files_copy = [f.copy() for f in sample_files]
@@ -750,6 +756,7 @@ class TestCachedFullScanEndpoint:
 
         assert response.status_code == 404
 
+    @patch("backend.main.get_cache_metadata")
     @patch("backend.main.load_cache")
     @patch("backend.main.get_service")
     @patch("backend.main.validate_cache_with_drive")
@@ -760,10 +767,16 @@ class TestCachedFullScanEndpoint:
         mock_validate,
         mock_service,
         mock_load,
+        mock_get_metadata,
         client,
         sample_files,
     ):
         """Test successful cached data retrieval."""
+        # Mock cache metadata to exist
+        mock_get_metadata.return_value = CacheMetadata(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            cache_version=1,
+        )
         mock_load.return_value = {
             "data": {
                 "files": sample_files,
@@ -786,3 +799,154 @@ class TestCachedFullScanEndpoint:
         data = response.json()
         assert "files" in data
         assert "stats" in data
+
+
+@pytest.mark.api
+class TestFullScanCacheStatusEndpoint:
+    """Tests for /api/scan/full/cache/status endpoint (fast TTL-based check)."""
+
+    @patch("backend.main.get_cache_metadata")
+    def test_cache_status_missing(self, mock_get_metadata, client):
+        """Test when cache doesn't exist."""
+        mock_get_metadata.return_value = None
+
+        response = client.get("/api/scan/full/cache/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exists"] is False
+        assert data["valid"] is False
+        assert data["reason"] == "missing"
+
+    @patch("backend.main.get_cache_metadata")
+    @patch("backend.main.is_cache_valid_time_based")
+    def test_cache_status_ttl_fresh(self, mock_is_valid, mock_get_metadata, client):
+        """Test when cache exists and is TTL-fresh (no Drive call)."""
+        mock_get_metadata.return_value = CacheMetadata(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            file_count=100,
+            total_size=1024000,
+            cache_version=1,
+        )
+        mock_is_valid.return_value = True
+
+        response = client.get("/api/scan/full/cache/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exists"] is True
+        assert data["valid"] is True
+        assert data["reason"] == "ttl_fresh"
+        assert data["file_count"] == 100
+        assert data["total_size"] == 1024000
+        # Verify no Drive validation was called (should only use TTL check)
+        mock_is_valid.assert_called_once()
+
+    @patch("backend.main.get_cache_metadata")
+    @patch("backend.main.is_cache_valid_time_based")
+    def test_cache_status_ttl_expired(self, mock_is_valid, mock_get_metadata, client):
+        """Test when cache exists but TTL expired (no Drive call)."""
+        mock_get_metadata.return_value = CacheMetadata(
+            timestamp=(datetime.now(timezone.utc) - timedelta(days=31)).isoformat(),
+            file_count=100,
+            total_size=1024000,
+            cache_version=1,
+        )
+        mock_is_valid.return_value = False
+
+        response = client.get("/api/scan/full/cache/status")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exists"] is True
+        assert data["valid"] is False
+        assert data["reason"] == "ttl_expired"
+
+
+@pytest.mark.api
+class TestFullScanCacheValidateEndpoint:
+    """Tests for /api/scan/full/cache/validate endpoint (Drive-based validation)."""
+
+    @patch("backend.main.get_cache_metadata")
+    def test_validate_cache_missing(self, mock_get_metadata, client):
+        """Test validation when cache doesn't exist."""
+        mock_get_metadata.return_value = None
+
+        response = client.get("/api/scan/full/cache/validate")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exists"] is False
+        assert data["valid"] is False
+        assert data["reason"] == "missing"
+
+    @patch("backend.main.get_cache_metadata")
+    @patch("backend.main.get_service")
+    @patch("backend.main.validate_cache_with_drive")
+    def test_validate_cache_valid(self, mock_validate, mock_get_service, mock_get_metadata, client):
+        """Test successful Drive validation."""
+        mock_get_metadata.return_value = CacheMetadata(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            file_count=100,
+            total_size=1024000,
+            cache_version=1,
+        )
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_validate.return_value = True
+
+        response = client.get("/api/scan/full/cache/validate")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exists"] is True
+        assert data["valid"] is True
+        assert data["reason"] == "ok"
+        # Verify Drive validation was called
+        mock_validate.assert_called_once()
+
+    @patch("backend.main.get_cache_metadata")
+    @patch("backend.main.get_service")
+    @patch("backend.main.validate_cache_with_drive")
+    def test_validate_cache_invalid(self, mock_validate, mock_get_service, mock_get_metadata, client):
+        """Test when Drive validation determines cache is invalid."""
+        mock_get_metadata.return_value = CacheMetadata(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            file_count=100,
+            total_size=1024000,
+            cache_version=1,
+        )
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_validate.return_value = False
+
+        response = client.get("/api/scan/full/cache/validate")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exists"] is True
+        assert data["valid"] is False
+        assert data["reason"] == "invalid_or_expired"
+
+    @patch("backend.main.get_cache_metadata")
+    @patch("backend.main.get_service")
+    @patch("backend.main.validate_cache_with_drive")
+    def test_validate_cache_error(self, mock_validate, mock_get_service, mock_get_metadata, client):
+        """Test when Drive validation raises an error."""
+        mock_get_metadata.return_value = CacheMetadata(
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            file_count=100,
+            total_size=1024000,
+            cache_version=1,
+        )
+        mock_service = MagicMock()
+        mock_get_service.return_value = mock_service
+        mock_validate.side_effect = Exception("Drive API error")
+
+        response = client.get("/api/scan/full/cache/validate")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["exists"] is True
+        assert data["valid"] is False
+        assert "error:" in data["reason"]

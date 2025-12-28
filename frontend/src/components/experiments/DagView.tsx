@@ -20,6 +20,7 @@ interface DagViewProps {
   files: FileItem[];
   childrenMap: Record<string, string[]>;
   onFileClick?: (file: FileItem) => void;
+  initialSelectedNodeId?: string;  // For navigation from other views (e.g., duplicate finder)
 }
 
 const TAB_DEFS: Array<{ id: DagTabId; label: string }> = [
@@ -36,6 +37,7 @@ const TAB_DEFS: Array<{ id: DagTabId; label: string }> = [
 
 const DEFAULT_FILTERS: DagFilters = {
   foldersOnly: false,
+  hideShared: false,
   minSizeBytes: 0,
   maxDepth: 6,
   maxNodes: 2000,
@@ -45,23 +47,35 @@ const DEFAULT_FILTERS: DagFilters = {
   maxPaths: 20,
 };
 
-export const DagView = ({ files, onFileClick }: DagViewProps) => {
+export const DagView = ({ files, onFileClick, initialSelectedNodeId }: DagViewProps) => {
   const [activeTab, setActiveTab] = useState<DagTabId>('tree');
   const [filters, setFilters] = useState<DagFilters>(DEFAULT_FILTERS);
 
   const dag = useMemo(() => buildDriveDag(files), [files]);
   const fileById = useMemo(() => new Map(files.map((f) => [f.id, f])), [files]);
 
-  const [selectedNodeId, setSelectedNodeId] = useState<string>('');
-  const [selectedRootIds, setSelectedRootIds] = useState<string[]>([]);
+  const [selectedNodeId, setSelectedNodeId] = useState<string>(initialSelectedNodeId || '');
+  const [selectedRootIds, setSelectedRootIds] = useState<string[]>(initialSelectedNodeId ? [initialSelectedNodeId] : []);
 
-  // Initialize defaults once data is available
+  // Handle external navigation (when initialSelectedNodeId changes)
+  useEffect(() => {
+    if (initialSelectedNodeId && dag.nodesById.has(initialSelectedNodeId)) {
+      setSelectedNodeId(initialSelectedNodeId);
+      setSelectedRootIds([initialSelectedNodeId]);
+      // Switch to ego tab for focused view of the target node
+      setActiveTab('ego');
+    }
+  }, [initialSelectedNodeId, dag.nodesById]);
+
+  // Initialize defaults once data is available (only if no initial selection)
   useEffect(() => {
     if (dag.roots.length === 0) return;
+    // Don't override if we have an external selection
+    if (initialSelectedNodeId && dag.nodesById.has(initialSelectedNodeId)) return;
 
     setSelectedRootIds((prev) => (prev.length > 0 ? prev : [dag.roots[0]]));
     setSelectedNodeId((prev) => (prev && dag.nodesById.has(prev) ? prev : dag.roots[0]));
-  }, [dag.roots, dag.nodesById]);
+  }, [dag.roots, dag.nodesById, initialSelectedNodeId]);
 
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -166,7 +180,7 @@ export const DagView = ({ files, onFileClick }: DagViewProps) => {
         </div>
 
         {/* Summary */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mt-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 mt-4">
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
             <div className="text-xs text-gray-500">Nodes</div>
             <div className="text-lg font-semibold">{dag.nodesById.size.toLocaleString()}</div>
@@ -182,6 +196,10 @@ export const DagView = ({ files, onFileClick }: DagViewProps) => {
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
             <div className="text-xs text-gray-500">Max depth</div>
             <div className="text-lg font-semibold">{dag.maxDepth.toLocaleString()}</div>
+          </div>
+          <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
+            <div className="text-xs text-purple-600">Shared with me</div>
+            <div className="text-lg font-semibold text-purple-700">{dag.ownershipStats.sharedCount.toLocaleString()}</div>
           </div>
           <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
             <div className="text-xs text-gray-500">Cycles</div>
@@ -220,6 +238,15 @@ export const DagView = ({ files, onFileClick }: DagViewProps) => {
                   onChange={(e) => setFilters({ ...filters, foldersOnly: e.target.checked })}
                 />
                 Folders only
+              </label>
+
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={filters.hideShared}
+                  onChange={(e) => setFilters({ ...filters, hideShared: e.target.checked })}
+                />
+                Hide shared
               </label>
 
               <div className="flex items-center gap-2">

@@ -2,7 +2,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
-import type { FullScanStatusResponse, ScanResponse } from '../types/drive';
+import { logger } from '../utils/logger';
+import type { FullScanCacheStatusResponse, FullScanStatusResponse, ScanResponse } from '../types/drive';
 
 export interface ScanTiming {
   startTime: number | null;
@@ -22,7 +23,36 @@ export const useFullScan = () => {
   const startTimeRef = useRef<number | null>(null);
   const lastProgressRef = useRef<number | null>(null);
 
-  // Load cached full scan data on mount (instant, no polling needed)
+  // Fast cache status check (sidecar-first) to avoid loading huge cached payload on app load
+  const {
+    data: cacheStatus,
+    isLoading: isCacheStatusLoading,
+  } = useQuery({
+    queryKey: ['fullScanCacheStatus'] as const,
+    queryFn: async (): Promise<FullScanCacheStatusResponse> => api.getFullScanCacheStatus(),
+    staleTime: 60 * 1000, // 1 minute
+    gcTime: 10 * 60 * 1000, // keep for 10 minutes
+    retry: 1,
+    refetchOnMount: false,
+  });
+
+  // Load cached full scan immediately if cache exists (not waiting for validation)
+  const shouldFetchCachedFullScan = cacheStatus?.exists === true;
+
+  // Log cache status decision on startup
+  useEffect(() => {
+    if (cacheStatus !== undefined) {
+      logger.info('startup', 'Full scan cache status check', {
+        exists: cacheStatus?.exists,
+        valid: cacheStatus?.valid,
+        reason: cacheStatus?.reason,
+        fileCount: cacheStatus?.file_count,
+        willLoadFromCache: shouldFetchCachedFullScan,
+      });
+    }
+  }, [cacheStatus, shouldFetchCachedFullScan]);
+
+  // Load cached full scan data immediately when cache exists (even if TTL expired)
   const {
     data: cachedData,
     isLoading: isCacheLoading,
@@ -34,14 +64,73 @@ export const useFullScan = () => {
     gcTime: 60 * 60 * 1000, // Keep in cache for 1 hour
     retry: false, // Don't retry 404s
     refetchOnMount: false, // Don't refetch if we already have data
+    enabled: shouldFetchCachedFullScan,
+  });
+
+  // Background validation query (runs when cache exists, especially if TTL expired)
+  // Validate if: cache exists AND (cached data loaded OR TTL expired)
+  const shouldValidateCache = cacheStatus?.exists === true && 
+                              (cachedData !== undefined || cacheStatus?.reason === 'ttl_expired');
+  
+  const {
+    data: validationStatus,
+    isLoading: isValidatingCache,
+  } = useQuery({
+    queryKey: ['fullScanCacheValidation'] as const,
+    queryFn: async (): Promise<FullScanCacheStatusResponse> => api.validateFullScanCache(),
+    staleTime: 5 * 60 * 1000, // 5 minutes
+    gcTime: 10 * 60 * 1000, // Keep for 10 minutes
+    retry: 1,
+    refetchOnMount: false,
+    enabled: shouldValidateCache,
   });
 
   // Check for cached full scan result in query client (fallback)
   const cachedResult = cachedData || queryClient.getQueryData<ScanResponse>(['fullScanResult']);
 
+  // Log when cached data is loaded
+  useEffect(() => {
+    if (cachedData) {
+      logger.info('startup', 'Full scan data loaded from cache', {
+        fileCount: cachedData.stats?.total_files,
+        folderCount: cachedData.stats?.folder_count,
+        totalSize: cachedData.stats?.total_size,
+        ttlValid: cacheStatus?.valid,
+        reason: cacheStatus?.reason,
+      });
+    }
+  }, [cachedData, cacheStatus]);
+
+  // Determine cache warning message based on validation status
+  const getCacheWarning = (): string | null => {
+    if (!cacheStatus?.exists) {
+      return null;
+    }
+    
+    // If validation completed and cache is invalid
+    if (validationStatus && !validationStatus.valid) {
+      return 'Cache invalid - Drive has changed. Please run a new full scan.';
+    }
+    
+    // If TTL expired but validation is still running
+    if (cacheStatus.reason === 'ttl_expired' && isValidatingCache) {
+      return 'Cache expired by TTL; validating against Drive...';
+    }
+    
+    // If TTL expired and validation hasn't started yet
+    if (cacheStatus.reason === 'ttl_expired' && !validationStatus) {
+      return 'Cache expired by TTL; validating against Drive...';
+    }
+    
+    return null;
+  };
+
+  const cacheWarning = getCacheWarning();
+
   // Mutation to start a scan
   const startScanMutation = useMutation({
     mutationFn: async () => {
+      logger.info('scan', 'Starting full scan...');
       const startTime = performance.now();
       startTimeRef.current = startTime;
       lastProgressRef.current = 0;
@@ -53,6 +142,7 @@ export const useFullScan = () => {
       });
       
       const result = await api.startFullScan();
+      logger.info('scan', 'Full scan initiated', { scanId: result.scan_id });
       
       // Invalidate any existing scan status queries
       queryClient.invalidateQueries({ queryKey: ['fullScan', result.scan_id] });
@@ -114,6 +204,13 @@ export const useFullScan = () => {
       lastProgressRef.current = currentProgress;
     } else if (progress?.status === 'complete' && startTimeRef.current) {
       const duration = performance.now() - startTimeRef.current;
+      logger.info('scan', 'Full scan completed', {
+        durationMs: Math.round(duration),
+        durationFormatted: duration > 60000 
+          ? `${(duration / 60000).toFixed(1)}m` 
+          : `${(duration / 1000).toFixed(1)}s`,
+        fileCount: progress.result?.stats?.total_files,
+      });
       setTiming({
         startTime: startTimeRef.current,
         duration,
@@ -122,6 +219,10 @@ export const useFullScan = () => {
       });
     } else if (progress?.status === 'error' && startTimeRef.current) {
       const duration = performance.now() - startTimeRef.current;
+      logger.error('scan', 'Full scan failed', {
+        durationMs: Math.round(duration),
+        error: progress.error,
+      });
       setTiming({
         startTime: startTimeRef.current,
         duration,
@@ -146,11 +247,19 @@ export const useFullScan = () => {
     scanId,
     progress: progress || null,
     result,
-    isLoading: isCacheLoading || startScanMutation.isPending || isPolling,
+    isLoading:
+      isCacheStatusLoading || isCacheLoading || startScanMutation.isPending || isPolling,
     error: startScanMutation.error || pollError || null,
     startScan,
     dataUpdatedAt: effectiveDataUpdatedAt, // For cache status indicators
     timing, // Performance timing information
     isFromCache: result === cachedResult && !progress?.result, // Indicates if showing cached data
+    cacheStatus: cacheStatus || null,
+    // Cache hydration progress flags
+    isCheckingCacheStatus: isCacheStatusLoading,
+    isLoadingCachedScan: isCacheLoading && shouldFetchCachedFullScan,
+    isValidatingCache: isValidatingCache,
+    cacheWarning, // Warning message if cache is invalid/expired
+    cacheValidationStatus: validationStatus || null,
   };
 };

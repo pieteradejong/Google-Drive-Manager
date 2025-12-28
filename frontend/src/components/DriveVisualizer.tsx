@@ -1,5 +1,5 @@
 /** Main Drive visualization component */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Loader2, RefreshCw, LayoutGrid, AlertCircle, Zap, Database, Clock, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { useQuickScan } from '../hooks/useQuickScan';
 import { useFullScan } from '../hooks/useFullScan';
@@ -9,6 +9,7 @@ import { useVisualizationStore } from '../stores/visualizationStore';
 import { ListView } from './ListView';
 import { api } from '../api/client';
 import { useQueryClient } from '@tanstack/react-query';
+import { logger } from '../utils/logger';
 import type { FileItem, ScanResponse } from '../types/drive';
 import type { ExperimentType } from '../stores/visualizationStore';
 
@@ -30,6 +31,7 @@ const FileAgeAnalysisView = lazy(() => import('./experiments/FileAgeAnalysisView
 const FolderDepthView = lazy(() => import('./experiments/FolderDepthView').then(m => ({ default: m.FolderDepthView })));
 const ActivityTimelineView = lazy(() => import('./experiments/ActivityTimelineView').then(m => ({ default: m.ActivityTimelineView })));
 const SharedFilesView = lazy(() => import('./experiments/SharedFilesView').then(m => ({ default: m.SharedFilesView })));
+const SharedWithMeView = lazy(() => import('./experiments/SharedWithMeView').then(m => ({ default: m.SharedWithMeView })));
 const OrphanedFilesView = lazy(() => import('./experiments/OrphanedFilesView').then(m => ({ default: m.OrphanedFilesView })));
 const FolderTreeView = lazy(() => import('./experiments/FolderTreeView').then(m => ({ default: m.FolderTreeView })));
 const SemanticAnalysisView = lazy(() => import('./experiments/SemanticAnalysisView').then(m => ({ default: m.SemanticAnalysisView })));
@@ -59,7 +61,7 @@ const ExperimentFeedback = ({ experiment }: { experiment: ExperimentType }) => {
   const handleFeedback = (type: 'up' | 'down') => {
     setFeedback(type);
     // Could send to analytics/backend here
-    console.log(`Experiment feedback: ${experiment} - ${type}`);
+    logger.info('feedback', `Experiment feedback: ${experiment}`, { type, experiment });
   };
   
   return (
@@ -99,21 +101,67 @@ export const DriveVisualizer = () => {
     setCurrentFolderId 
   } = useVisualizationStore();
   const { data: quickData, isLoading: quickLoading, error: quickError, scan: quickScan, dataUpdatedAt: quickDataUpdatedAt, timing: quickTiming } = useQuickScan();
-  const { progress: fullProgress, result: fullResult, isLoading: fullLoading, error: fullError, startScan: startFullScan, dataUpdatedAt: fullDataUpdatedAt, timing: fullTiming } = useFullScan();
+  const { 
+    progress: fullProgress, 
+    result: fullResult, 
+    isLoading: fullLoading, 
+    error: fullError, 
+    startScan: startFullScan, 
+    dataUpdatedAt: fullDataUpdatedAt, 
+    timing: fullTiming,
+    isCheckingCacheStatus,
+    isLoadingCachedScan,
+    isValidatingCache,
+    cacheWarning,
+    cacheStatus,
+    cacheValidationStatus,
+  } = useFullScan();
   
   const [displayData, setDisplayData] = useState<ScanResponse | null>(null);
+  
+  // Target folder for cross-view navigation (e.g., from duplicate finder to DAG view)
+  const [dagNavigationTarget, setDagNavigationTarget] = useState<string | null>(null);
 
   // Kick off backend derived analytics computation once full scan data is available
   useEnsureAnalyticsStarted(Boolean(fullResult));
   
+  // Log component mount
+  useEffect(() => {
+    logger.info('visualizer', 'DriveVisualizer mounted', {
+      hasQuickData: !!quickData,
+      hasFullResult: !!fullResult,
+      currentExperiment,
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  
   // Note: Cached data now loads automatically via useFullScan hook's useQuery
   // No need to manually trigger startFullScan on mount
+
+  // Track previous data source for logging transitions
+  const prevDataSourceRef = useRef<'none' | 'quick' | 'full'>('none');
 
   // Update display data when we have results (including cached data on load)
   useEffect(() => {
     if (fullResult) {
+      const prevSource = prevDataSourceRef.current;
+      if (prevSource !== 'full') {
+        logger.info('visualizer', 'Display data updated to full scan result', {
+          previousSource: prevSource,
+          fileCount: fullResult.stats?.total_files,
+          folderCount: fullResult.stats?.folder_count,
+        });
+        prevDataSourceRef.current = 'full';
+      }
       setDisplayData(fullResult);
     } else if (quickData) {
+      const prevSource = prevDataSourceRef.current;
+      if (prevSource !== 'quick') {
+        logger.info('visualizer', 'Display data updated to quick scan result', {
+          previousSource: prevSource,
+          topFolders: quickData.top_folders.length,
+        });
+        prevDataSourceRef.current = 'quick';
+      }
       // Show quick scan results (top folders only)
       // Convert QuickScanResponse to ScanResponse format for display
       const quickResponse: ScanResponse = {
@@ -130,7 +178,15 @@ export const DriveVisualizer = () => {
     }
   }, [quickData, fullResult]);
 
+  // Log experiment view changes
+  useEffect(() => {
+    logger.info('visualizer', 'Experiment view changed', {
+      experiment: currentExperiment,
+    });
+  }, [currentExperiment]);
+
   const handleQuickScan = async () => {
+    logger.info('action', 'User initiated quick scan');
     try {
       await quickScan();
     } catch (err) {
@@ -139,6 +195,7 @@ export const DriveVisualizer = () => {
   };
 
   const handleFullScan = async () => {
+    logger.info('action', 'User initiated full scan');
     try {
       await startFullScan();
     } catch (err) {
@@ -151,6 +208,20 @@ export const DriveVisualizer = () => {
       window.open(file.webViewLink, '_blank');
     }
   };
+
+  // Navigate to a folder in the DAG view (for cross-view navigation)
+  const navigateToFolderInDag = (folderId: string) => {
+    logger.info('navigation', 'Navigating to folder in DAG view', { folderId });
+    setDagNavigationTarget(folderId);
+    setCurrentExperiment('dag');
+  };
+
+  // Clear navigation target when leaving DAG view
+  useEffect(() => {
+    if (currentExperiment !== 'dag') {
+      setDagNavigationTarget(null);
+    }
+  }, [currentExperiment]);
 
   const error = quickError || fullError;
   const isLoading = quickLoading || fullLoading;
@@ -167,6 +238,8 @@ export const DriveVisualizer = () => {
       if (scanType === 'quick_scan') {
         queryClient.invalidateQueries({ queryKey: ['quickScan'] });
       } else if (scanType === 'full_scan') {
+        queryClient.invalidateQueries({ queryKey: ['fullScanResult'] });
+        queryClient.invalidateQueries({ queryKey: ['fullScanCacheStatus'] });
         queryClient.invalidateQueries({ queryKey: ['fullScan'] });
       } else {
         queryClient.invalidateQueries();
@@ -277,6 +350,7 @@ export const DriveVisualizer = () => {
         break;
       case 'duplicate-finder':
         ExperimentComponent = DuplicateFinderView;
+        experimentProps = { ...commonProps, onNavigateToFolder: navigateToFolderInDag };
         break;
       case 'file-age':
         ExperimentComponent = FileAgeAnalysisView;
@@ -289,6 +363,9 @@ export const DriveVisualizer = () => {
         break;
       case 'shared-files':
         ExperimentComponent = SharedFilesView;
+        break;
+      case 'shared-with-me':
+        ExperimentComponent = SharedWithMeView;
         break;
       case 'orphaned-files':
         ExperimentComponent = OrphanedFilesView;
@@ -307,6 +384,7 @@ export const DriveVisualizer = () => {
         break;
       case 'dag':
         ExperimentComponent = DagView;
+        experimentProps = { ...commonProps, initialSelectedNodeId: dagNavigationTarget || undefined };
         break;
       case 'list':
         return <ListView {...commonProps} />;
@@ -334,8 +412,28 @@ export const DriveVisualizer = () => {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
+      {/* Cache Warning Banner - Show if cache is invalid */}
+      {cacheWarning && (
+        <div className="bg-red-50 border-b border-red-200 px-4 py-2">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <AlertCircle size={16} className="text-red-600 flex-shrink-0" />
+              <span className="text-red-800">{cacheWarning}</span>
+            </div>
+            {cacheValidationStatus && !cacheValidationStatus.valid && (
+              <button
+                onClick={handleFullScan}
+                className="px-3 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700 transition-colors whitespace-nowrap"
+              >
+                Run Full Scan
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Compact Cache Status Banner - Single line, minimal refresh options */}
-      {hasAnyCache && (
+      {hasAnyCache && !cacheWarning && (
         <div className="bg-amber-50/80 border-b border-amber-200/50 px-4 py-1.5">
           <div className="flex items-center justify-between text-xs">
             <div className="flex items-center gap-2 flex-wrap">
@@ -344,7 +442,7 @@ export const DriveVisualizer = () => {
                 {showQuickCache && showFullCache ? (
                   <>Cached: Quick {formatTimeAgo(quickDataUpdatedAt)}, Full {formatTimeAgo(fullDataUpdatedAt)}</>
                 ) : showFullCache ? (
-                  <>Cached full scan from {formatTimeAgo(fullDataUpdatedAt)}</>
+                  <>Using cached full scan from {formatTimeAgo(fullDataUpdatedAt)}</>
                 ) : (
                   <>Cached data from {formatTimeAgo(quickDataUpdatedAt)}</>
                 )}
@@ -435,16 +533,25 @@ export const DriveVisualizer = () => {
                     ? "Requires quick scan first"
                     : fullProgress?.status === 'running'
                       ? `Scanning... ${Math.round(fullProgress.progress.progress)}%`
-                      : fullResult
-                        ? "✓ Completed"
-                        : "Scan all files & calculate sizes"}
+                      : isLoadingCachedScan
+                        ? "Loading cached scan..."
+                        : isValidatingCache
+                          ? "Validating cache..."
+                          : fullResult
+                            ? "✓ Completed"
+                            : "Scan all files & calculate sizes"}
                 </p>
-                <PerformanceIndicator 
-                  timing={fullTiming} 
-                  operationName="Full Scan"
-                  isRunning={fullProgress?.status === 'running' || fullLoading}
-                  className="mt-0.5"
-                />
+                {(isLoadingCachedScan || isValidatingCache) && (
+                  <Loader2 className="animate-spin text-primary-600 mt-0.5" size={12} />
+                )}
+                {!isLoadingCachedScan && !isValidatingCache && (
+                  <PerformanceIndicator 
+                    timing={fullTiming} 
+                    operationName="Full Scan"
+                    isRunning={fullProgress?.status === 'running' || fullLoading}
+                    className="mt-0.5"
+                  />
+                )}
               </div>
             </div>
 
@@ -507,39 +614,49 @@ export const DriveVisualizer = () => {
 
       {/* Full Scan Progress */}
       {fullProgress && fullProgress.status === 'running' && (
-        <div className="bg-yellow-50 border-b border-yellow-200 px-6 py-4">
-          <div className="max-w-2xl">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-gray-900">
-                {fullProgress.progress.stage === 'fetching' && 'Fetching files...'}
-                {fullProgress.progress.stage === 'building_tree' && 'Building folder structure...'}
-                {fullProgress.progress.stage === 'calculating_sizes' && 'Calculating folder sizes...'}
-              </span>
-              <span className="text-sm text-gray-600">{Math.round(fullProgress.progress.progress)}%</span>
+        <div className="bg-amber-50 border-b border-amber-200 px-6 py-4">
+          <div className="max-w-3xl">
+            {/* Stage header with step indicator */}
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-1 rounded">
+                  {fullProgress.progress.stage === 'fetching' && 'Step 1 of 3'}
+                  {fullProgress.progress.stage === 'building_tree' && 'Step 2 of 3'}
+                  {fullProgress.progress.stage === 'calculating_sizes' && 'Step 3 of 3'}
+                </div>
+                <span className="text-sm font-semibold text-gray-900">
+                  {fullProgress.progress.stage === 'fetching' && 'Downloading from Google Drive'}
+                  {fullProgress.progress.stage === 'building_tree' && 'Building Folder Hierarchy'}
+                  {fullProgress.progress.stage === 'calculating_sizes' && 'Computing Folder Sizes'}
+                </span>
+              </div>
+              <span className="text-sm font-medium text-gray-700">{Math.round(fullProgress.progress.progress)}%</span>
             </div>
-            <div className="w-full bg-gray-200 rounded-full h-2 mb-2">
+            
+            {/* Progress bar */}
+            <div className="w-full bg-amber-200 rounded-full h-2.5 mb-3">
               <div
-                className="bg-primary-600 h-2 rounded-full transition-all duration-300"
+                className="bg-amber-500 h-2.5 rounded-full transition-all duration-300"
                 style={{ width: `${fullProgress.progress.progress}%` }}
               />
             </div>
-            <div className="text-xs text-gray-600">
+            
+            {/* Detailed message from backend */}
+            <p className="text-sm text-gray-700 mb-2">
               {fullProgress.progress.message}
+            </p>
+            
+            {/* Additional stats */}
+            <div className="flex items-center gap-4 text-xs text-gray-500">
               {fullProgress.progress.current_page && fullProgress.progress.estimated_pages && (
-                <span> • Page {fullProgress.progress.current_page} of ~{fullProgress.progress.estimated_pages}</span>
+                <span>Page {fullProgress.progress.current_page} of ~{fullProgress.progress.estimated_pages}</span>
               )}
-              {fullProgress.progress.files_fetched && (
-                <span> • {fullProgress.progress.files_fetched.toLocaleString()} files fetched</span>
-              )}
-              {/* Show timing information */}
               {fullTiming.startTime && (
-                <span className="ml-2">
-                  • <PerformanceIndicator 
-                      timing={fullTiming} 
-                      operationName="Full Scan"
-                      isRunning={true}
-                    />
-                </span>
+                <PerformanceIndicator 
+                  timing={fullTiming} 
+                  operationName="Full Scan"
+                  isRunning={true}
+                />
               )}
             </div>
           </div>
@@ -608,7 +725,8 @@ export const DriveVisualizer = () => {
                   <option value="file-age">File Age Analysis</option>
                   <option value="folder-depth">Folder Depth Analysis</option>
                   <option value="activity-timeline">Activity Timeline</option>
-                  <option value="shared-files">Shared Files</option>
+                  <option value="shared-files">Multi-Parent Files</option>
+                  <option value="shared-with-me">Shared With Me</option>
                   <option value="orphaned-files">Orphaned Files</option>
                   <option value="semantic-analysis">Semantic Analysis</option>
                   <option value="age-semantic">Age + Semantic</option>

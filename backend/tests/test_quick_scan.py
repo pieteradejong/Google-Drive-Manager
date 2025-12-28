@@ -143,33 +143,19 @@ class TestQuickScanEndpoint:
 class TestFullScanEndpoints:
     """Tests for full scan endpoints."""
 
+    @patch("backend.main.get_cache_metadata")
     @patch("backend.main.get_service")
-    @patch("backend.main.list_all_files")
-    @patch("backend.main.build_tree_structure")
     def test_start_full_scan(
-        self, mock_build_tree, mock_list_files, mock_get_service, client, sample_files
+        self, mock_get_service, mock_get_metadata, client, sample_files
     ):
         """Test starting a full scan returns scan_id."""
         # Clear any existing scan states
         main._scan_states.clear()
 
+        # No cache metadata - will start a new scan
+        mock_get_metadata.return_value = None
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
-
-        # Create copy to avoid modifying fixture
-        files_copy = [f.copy() for f in sample_files]
-        for f in files_copy:
-            if f.get("size") and isinstance(f["size"], str):
-                f["size"] = int(f["size"])
-
-        mock_list_files.return_value = files_copy
-
-        tree_data = {
-            "files": files_copy,
-            "file_map": {f["id"]: f for f in files_copy},
-            "children_map": {"folder1": ["file2", "folder2"], "folder2": ["file3"]},
-        }
-        mock_build_tree.return_value = tree_data
 
         response = client.post("/api/scan/full/start")
 
@@ -190,21 +176,25 @@ class TestFullScanEndpoints:
         assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
+    @patch("backend.main.get_cache_metadata")
     @patch("backend.main.get_service")
-    @patch("backend.main.list_all_files")
+    @patch("backend.main.list_all_files_full")
     @patch("backend.main.build_tree_structure")
+    @patch("backend.main.get_my_drive_root")
     def test_full_scan_progress(
-        self, mock_build_tree, mock_list_files, mock_get_service, client, sample_files
+        self, mock_get_root, mock_build_tree, mock_list_files, mock_get_service, mock_get_metadata, client, sample_files
     ):
         """Test full scan progress tracking."""
         import time
-        import threading
 
         # Clear scan states
         main._scan_states.clear()
 
+        # No cache, will start a new scan
+        mock_get_metadata.return_value = None
         mock_service = MagicMock()
         mock_get_service.return_value = mock_service
+        mock_get_root.return_value = None
 
         # Create copy to avoid modifying fixture
         files_copy = [f.copy() for f in sample_files]

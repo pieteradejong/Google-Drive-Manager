@@ -1,4 +1,4 @@
-import { Folder, File as FileIcon } from 'lucide-react';
+import { Folder, File as FileIcon, Users } from 'lucide-react';
 import type { DagTabProps } from './types';
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -24,12 +24,21 @@ const NodeRow = ({
     <FileIcon size={16} className="text-gray-500 flex-shrink-0" />
   );
 
+  const isShared = !node.ownedByMe;
+
   return (
-    <div className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-100">
+    <div className={`flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-100 ${isShared ? 'bg-purple-50' : ''}`}>
       <div className="w-10 text-[10px] text-gray-500">{label}</div>
       {icon}
       <button className="flex-1 min-w-0 text-left" onClick={onSelect}>
-        <div className="text-sm font-medium truncate">{node.name || '(unnamed)'}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="text-sm font-medium truncate">{node.name || '(unnamed)'}</span>
+          {isShared && (
+            <span className="text-[10px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 flex items-center gap-0.5">
+              <Users size={10} />
+            </span>
+          )}
+        </div>
         <div className="text-xs text-gray-500 truncate">
           id: {id} • parents: {(dag.parentsById.get(id) || []).length}
           {node.mimeType !== FOLDER_MIME ? ` • ${node.mimeType}` : ''}
@@ -101,7 +110,7 @@ export const EgoGraphTab = ({
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+        <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
           <div className="bg-gray-50 border border-gray-200 rounded p-2">
             <div className="text-gray-500">Parents</div>
             <div className="font-semibold">{parents.length}</div>
@@ -109,6 +118,17 @@ export const EgoGraphTab = ({
           <div className="bg-gray-50 border border-gray-200 rounded p-2">
             <div className="text-gray-500">Children</div>
             <div className="font-semibold">{children.length}</div>
+          </div>
+          <div className={`rounded p-2 ${center.ownedByMe ? 'bg-green-50 border border-green-200' : 'bg-purple-50 border border-purple-200'}`}>
+            <div className={center.ownedByMe ? 'text-green-600' : 'text-purple-600'}>Owner</div>
+            <div className="font-semibold flex items-center gap-1">
+              {center.ownedByMe ? 'Me' : (
+                <>
+                  <Users size={12} />
+                  Shared
+                </>
+              )}
+            </div>
           </div>
         </div>
 

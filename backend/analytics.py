@@ -214,59 +214,153 @@ def _classify_folder_by_content(
     return None
 
 
+# ---- Constants for duplicate detection
+
+SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
+WORKSPACE_MIMES = {
+    "application/vnd.google-apps.document",
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.google-apps.presentation",
+    "application/vnd.google-apps.form",
+    "application/vnd.google-apps.drawing",
+}
+
+# MD5 hash of empty file - all 0-byte files have this same hash
+EMPTY_FILE_MD5 = "d41d8cd98f00b204e9800998ecf8427e"
+
+
 # ---- Analytics computations
+
+
+def _build_duplicate_groups(
+    groups_dict: Dict[Any, List[Dict[str, Any]]],
+    confidence: str,
+    include_checksum: bool = False,
+) -> List[Dict[str, Any]]:
+    """
+    Build output duplicate groups from a grouping dict.
+    
+    Args:
+        groups_dict: Dict of grouping key -> list of files
+        confidence: 'verified' or 'potential'
+        include_checksum: Whether to include checksum in output (for verified groups)
+    
+    Returns:
+        List of duplicate group dicts sorted by potential_savings desc
+    """
+    out_groups: List[Dict[str, Any]] = []
+    
+    for key, flist in groups_dict.items():
+        if len(flist) < 2:
+            continue
+        
+        first = flist[0]
+        size = _safe_int(first.get("size") or 0)
+        potential_savings = (len(flist) - 1) * size
+        
+        group: Dict[str, Any] = {
+            "name": first.get("name", ""),
+            "size": size,
+            "file_ids": [f.get("id") for f in flist if f.get("id")],
+            "count": len(flist),
+            "potential_savings": potential_savings,
+            "confidence": confidence,
+            "mimeType": first.get("mimeType"),
+        }
+        
+        if include_checksum and isinstance(key, str):
+            group["checksum"] = key
+        
+        out_groups.append(group)
+    
+    out_groups.sort(key=lambda g: g["potential_savings"], reverse=True)
+    return out_groups
 
 
 def compute_duplicates(files: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
-    Group potential duplicates by name+size.
-    Returns groups sorted by potential savings (desc).
+    Detect duplicate files using a two-tier approach:
+    
+    1. VERIFIED duplicates: Binary files grouped by md5Checksum (100% confidence)
+       - Same md5Checksum = cryptographically proven identical content
+       - These are safe to deduplicate
+    
+    2. POTENTIAL duplicates: Workspace files grouped by name+size (needs manual check)
+       - Google Docs/Sheets/Slides have no md5Checksum
+       - Same name+size is a heuristic only
+    
+    Exclusions:
+    - Folders (not files)
+    - Shortcuts (references, not copies)
+    - Empty files (0 bytes - all have same hash)
+    
+    Returns:
+        Dict with:
+        - verified_groups: List of verified duplicate groups (by md5)
+        - potential_groups: List of potential duplicate groups (by name+size)
+        - groups: Combined list for backward compatibility
+        - total_verified_savings: Bytes recoverable from verified duplicates
+        - total_potential_savings: Bytes potentially recoverable from heuristic duplicates
     """
-    groups: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+    # Group by md5Checksum (verified) for binary files
+    checksum_groups: Dict[str, List[Dict[str, Any]]] = {}
+    # Group by name+size (potential) for Workspace files
+    heuristic_groups: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+    
     for f in files:
+        # Skip folders
         if _is_folder(f):
             continue
-        name = f.get("name") or ""
-        size = _safe_int(f.get("size") or 0)
-        key = (name, size)
-        groups.setdefault(key, []).append(f)
-
-    out_groups: List[Dict[str, Any]] = []
-    total_potential_savings = 0
-
-    for (name, size), flist in groups.items():
-        if len(flist) < 2:
+        
+        mime = f.get("mimeType") or ""
+        
+        # Skip shortcuts (they're references, not copies)
+        if mime == SHORTCUT_MIME:
             continue
-        potential_savings = (len(flist) - 1) * size
-        total_potential_savings += potential_savings
-
-        first = flist[0]
-        identical_metadata = True
-        for f in flist[1:]:
-            if (
-                f.get("name") != first.get("name")
-                or _safe_int(f.get("size") or 0) != _safe_int(first.get("size") or 0)
-                or f.get("mimeType") != first.get("mimeType")
-                or f.get("createdTime") != first.get("createdTime")
-                or f.get("modifiedTime") != first.get("modifiedTime")
-            ):
-                identical_metadata = False
-                break
-
-        out_groups.append(
-            {
-                "name": name,
-                "size": size,
-                "file_ids": [f.get("id") for f in flist if f.get("id")],
-                "count": len(flist),
-                "potential_savings": potential_savings,
-                "identical_metadata": identical_metadata,
-                "mimeType": first.get("mimeType"),
-            }
-        )
-
-    out_groups.sort(key=lambda g: g["potential_savings"], reverse=True)
-    return {"groups": out_groups, "total_potential_savings": total_potential_savings}
+        
+        size = _safe_int(f.get("size") or 0)
+        
+        # Skip empty files (all have same md5, not useful duplicates)
+        if size == 0:
+            continue
+        
+        checksum = f.get("md5Checksum")
+        
+        if checksum:
+            # Skip the empty file hash (shouldn't happen with size>0 check, but be safe)
+            if checksum == EMPTY_FILE_MD5:
+                continue
+            # Binary file with checksum - use verified grouping
+            checksum_groups.setdefault(checksum, []).append(f)
+        elif mime in WORKSPACE_MIMES:
+            # Workspace file (no checksum available) - use heuristic grouping
+            name = f.get("name") or ""
+            key = (name, size)
+            heuristic_groups.setdefault(key, []).append(f)
+        # Note: Files without md5Checksum that aren't Workspace files are skipped
+        # (this shouldn't happen for properly fetched data)
+    
+    # Build output groups with confidence levels
+    verified_groups = _build_duplicate_groups(
+        checksum_groups, confidence="verified", include_checksum=True
+    )
+    potential_groups = _build_duplicate_groups(
+        heuristic_groups, confidence="potential", include_checksum=False
+    )
+    
+    total_verified_savings = sum(g["potential_savings"] for g in verified_groups)
+    total_potential_savings = sum(g["potential_savings"] for g in potential_groups)
+    
+    return {
+        "verified_groups": verified_groups,
+        "potential_groups": potential_groups,
+        # Legacy compatibility: combined groups list
+        "groups": verified_groups + potential_groups,
+        "total_verified_savings": total_verified_savings,
+        "total_potential_savings": total_potential_savings,
+        # Legacy field name
+        "total_savings": total_verified_savings + total_potential_savings,
+    }
 
 
 def compute_orphans(

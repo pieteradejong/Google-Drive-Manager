@@ -14,6 +14,7 @@ export interface DagNode {
   name: string;
   mimeType: string;
   isFolder: boolean;
+  ownedByMe: boolean; // true = my file, false = shared with me
   parents: string[]; // all parent ids from dataset (may include missing)
   children: string[]; // only children present in dataset
   file: FileItem;
@@ -27,6 +28,13 @@ export interface DagWarnings {
   notes: string[];
 }
 
+export interface DagOwnershipStats {
+  ownedCount: number;       // Files where ownedByMe = true
+  sharedCount: number;      // Files where ownedByMe = false
+  ownedSizeBytes: number;   // Total size of owned files
+  sharedSizeBytes: number;  // Total size of shared files
+}
+
 export interface DriveDag {
   nodesById: Map<string, DagNode>;
   edges: DagEdge[];
@@ -37,6 +45,7 @@ export interface DriveDag {
   depthById: Map<string, number>;
   maxDepth: number;
   warnings: DagWarnings;
+  ownershipStats: DagOwnershipStats;
 }
 
 const FOLDER_MIME = 'application/vnd.google-apps.folder';
@@ -87,6 +96,7 @@ export function buildDriveDag(files: FileItem[]): DriveDag {
       name: f.name,
       mimeType: f.mimeType,
       isFolder: f.mimeType === FOLDER_MIME,
+      ownedByMe: f.ownedByMe ?? true, // Default to true if undefined
       parents: [...(f.parents || [])],
       children: [],
       file: f,
@@ -218,6 +228,30 @@ export function buildDriveDag(files: FileItem[]): DriveDag {
     notes,
   };
 
+  // Compute ownership stats
+  let ownedCount = 0;
+  let sharedCount = 0;
+  let ownedSizeBytes = 0;
+  let sharedSizeBytes = 0;
+
+  for (const node of nodesById.values()) {
+    const size = node.file.calculatedSize ?? node.file.size ?? 0;
+    if (node.ownedByMe) {
+      ownedCount++;
+      ownedSizeBytes += size;
+    } else {
+      sharedCount++;
+      sharedSizeBytes += size;
+    }
+  }
+
+  const ownershipStats: DagOwnershipStats = {
+    ownedCount,
+    sharedCount,
+    ownedSizeBytes,
+    sharedSizeBytes,
+  };
+
   return {
     nodesById,
     edges,
@@ -228,6 +262,7 @@ export function buildDriveDag(files: FileItem[]): DriveDag {
     depthById,
     maxDepth,
     warnings,
+    ownershipStats,
   };
 }
 

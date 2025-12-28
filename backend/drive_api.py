@@ -44,6 +44,17 @@ CHANGES_FIELDS = (
 # Minimal fields for backward compatibility with existing code
 MINIMAL_FIELDS = "nextPageToken, files(id, name, mimeType, parents, size, createdTime, modifiedTime, webViewLink)"
 
+# Fields for single file get (same as FULL_FIELDS but without wrapper)
+SINGLE_FILE_FIELDS = (
+    "id, name, mimeType, parents, trashed, createdTime, modifiedTime, "
+    "size, md5Checksum, ownedByMe, "
+    "owners(displayName, emailAddress, permissionId), "
+    "capabilities(canTrash, canDelete, canMoveItemWithinDrive, "
+    "canRemoveChildren, canAddChildren, canRename, canShare), "
+    "shortcutDetails(targetId, targetMimeType), "
+    "starred, webViewLink, iconLink"
+)
+
 
 def list_all_files(service) -> List[Dict[str, Any]]:
     """
@@ -239,6 +250,45 @@ def get_drive_overview(service) -> Dict[str, Any]:
         "user_email": user.get("emailAddress"),
         "user_display_name": user.get("displayName"),
     }
+
+
+def get_my_drive_root(service) -> Optional[Dict[str, Any]]:
+    """
+    Fetch the My Drive root folder metadata.
+
+    The Google Drive API's files.list() does not include the root folder itself,
+    but top-level items reference it as their parent. This function fetches
+    the root folder so it can be included in the file list, giving the DAG
+    a proper single root node.
+
+    Args:
+        service: Authenticated Google Drive API service
+
+    Returns:
+        Root folder metadata dict, or None if fetch fails (graceful degradation)
+    """
+    start_time = time.perf_counter()
+    try:
+        # 'root' is a special alias for the My Drive root folder
+        root = service.files().get(fileId="root", fields=SINGLE_FILE_FIELDS).execute()
+
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        perf_logger.info(
+            "get_my_drive_root",
+            duration_ms=duration_ms,
+            root_id=root.get("id"),
+            root_name=root.get("name"),
+        )
+        return root
+    except Exception as e:
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        perf_logger.warning(
+            "get_my_drive_root",
+            duration_ms=duration_ms,
+            message=f"Failed to fetch root folder (continuing without it): {str(e)}",
+        )
+        # Graceful degradation - return None and let caller continue without root
+        return None
 
 
 def get_top_level_folders(service) -> tuple[List[Dict[str, Any]], Optional[int]]:

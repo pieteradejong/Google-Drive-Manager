@@ -292,6 +292,25 @@ The app requests these fields from the Google Drive API:
 fields = "files(id, name, mimeType, parents, size, createdTime, modifiedTime, webViewLink)"
 ```
 
+### Root Folder Injection
+
+**Important:** The `files.list()` API does NOT return the "My Drive" root folder. We explicitly fetch it using:
+
+```python
+root = service.files().get(fileId='root', fields=SINGLE_FILE_FIELDS).execute()
+```
+
+The root folder is then injected at the start of the file list. This ensures:
+- The DAG has a single root node (instead of 600+ orphaned top-level items)
+- Top-level folders correctly reference their parent (the root ID)
+- "Missing parent references" warnings are eliminated for legitimate top-level items
+
+**Root folder characteristics:**
+- `id`: Real ID like `0AHTI1es55md1Uk9PVA` (not the alias "root")
+- `name`: "My Drive"
+- `mimeType`: `application/vnd.google-apps.folder`
+- `parents`: `[]` (empty array - this makes it the true DAG root)
+
 ### Fields NOT Retrieved (Available in API)
 
 | Field | Description | Why Not Used |
