@@ -238,3 +238,8 @@ Thumbs.db
 
 # Documentation PDFs (optional - uncomment if you don't want to track PDFs)
 # *.pdf
+
+# Drive scan caches: high-entropy IDs, and an index of Drive contents.
+# 41k of these were committed to public history in Dec 2025 (see
+# ~/dev/audit-reports/gitleaks-triage-2026-09-24.md). Never again.
+cache/
