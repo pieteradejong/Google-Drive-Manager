@@ -38,6 +38,7 @@ const SemanticAnalysisView = lazy(() => import('./experiments/SemanticAnalysisVi
 const AgeSemanticView = lazy(() => import('./experiments/AgeSemanticView').then(m => ({ default: m.AgeSemanticView })));
 const TypeSemanticView = lazy(() => import('./experiments/TypeSemanticView').then(m => ({ default: m.TypeSemanticView })));
 const DagView = lazy(() => import('./experiments/DagView').then(m => ({ default: m.DagView })));
+const StaleFilesView = lazy(() => import('./experiments/StaleFilesView').then(m => ({ default: m.StaleFilesView })));
 
 const formatSize = (bytes: number | string | undefined): string => {
   if (!bytes) return '0 B';
@@ -109,12 +110,13 @@ export const DriveVisualizer = () => {
     startScan: startFullScan, 
     dataUpdatedAt: fullDataUpdatedAt, 
     timing: fullTiming,
-    isCheckingCacheStatus,
     isLoadingCachedScan,
     isValidatingCache,
     cacheWarning,
-    cacheStatus,
     cacheValidationStatus,
+    isCacheStale,
+    cacheAgeFormatted,
+    isFromCache,
   } = useFullScan();
   
   const [displayData, setDisplayData] = useState<ScanResponse | null>(null);
@@ -282,6 +284,8 @@ export const DriveVisualizer = () => {
             return 'Calculating folder depths...';
           case 'duplicate-finder':
             return 'Finding duplicate files...';
+          case 'stale-files':
+            return 'Scanning for stale files...';
           case 'storage-dashboard':
             return 'Building storage dashboard...';
           case 'dag':
@@ -382,6 +386,9 @@ export const DriveVisualizer = () => {
       case 'type-semantic':
         ExperimentComponent = TypeSemanticView;
         break;
+      case 'stale-files':
+        ExperimentComponent = StaleFilesView;
+        break;
       case 'dag':
         ExperimentComponent = DagView;
         experimentProps = { ...commonProps, initialSelectedNodeId: dagNavigationTarget || undefined };
@@ -412,33 +419,53 @@ export const DriveVisualizer = () => {
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
-      {/* Cache Warning Banner - Show if cache is invalid */}
-      {cacheWarning && (
+      {/* Cache Invalid Warning Banner - Show if Drive has changed (red) */}
+      {cacheWarning && cacheValidationStatus && !cacheValidationStatus.valid && (
         <div className="bg-red-50 border-b border-red-200 px-4 py-2">
           <div className="flex items-center justify-between text-sm">
             <div className="flex items-center gap-2">
               <AlertCircle size={16} className="text-red-600 flex-shrink-0" />
               <span className="text-red-800">{cacheWarning}</span>
             </div>
-            {cacheValidationStatus && !cacheValidationStatus.valid && (
-              <button
-                onClick={handleFullScan}
-                className="px-3 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700 transition-colors whitespace-nowrap"
-              >
-                Run Full Scan
-              </button>
-            )}
+            <button
+              onClick={handleFullScan}
+              className="px-3 py-1 bg-red-600 text-white rounded text-xs hover:bg-red-700 transition-colors whitespace-nowrap"
+            >
+              Run Full Scan
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Stale Cache Warning Banner - Show if cache is older than 7 days (amber) */}
+      {isFromCache && isCacheStale && fullResult && !cacheWarning && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2">
+          <div className="flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <Clock size={16} className="text-amber-600 flex-shrink-0" />
+              <span className="text-amber-800">
+                Cached data is {cacheAgeFormatted} old. Consider running a fresh scan for the latest information.
+              </span>
+            </div>
+            <button
+              onClick={handleFullScan}
+              disabled={fullLoading || fullProgress?.status === 'running'}
+              className="px-3 py-1 bg-amber-600 text-white rounded text-xs hover:bg-amber-700 disabled:opacity-50 transition-colors whitespace-nowrap"
+            >
+              {fullLoading || fullProgress?.status === 'running' ? 'Scanning...' : 'Refresh Scan'}
+            </button>
           </div>
         </div>
       )}
 
       {/* Compact Cache Status Banner - Single line, minimal refresh options */}
-      {hasAnyCache && !cacheWarning && (
-        <div className="bg-amber-50/80 border-b border-amber-200/50 px-4 py-1.5">
+      {/* Don't show if staleness warning is already visible */}
+      {hasAnyCache && !cacheWarning && !(isFromCache && isCacheStale && fullResult) && (
+        <div className="bg-blue-50/80 border-b border-blue-200/50 px-4 py-1.5">
           <div className="flex items-center justify-between text-xs">
             <div className="flex items-center gap-2 flex-wrap">
-              <Clock size={12} className="text-amber-600 flex-shrink-0" />
-              <span className="text-amber-800">
+              <Clock size={12} className="text-blue-600 flex-shrink-0" />
+              <span className="text-blue-800">
                 {showQuickCache && showFullCache ? (
                   <>Cached: Quick {formatTimeAgo(quickDataUpdatedAt)}, Full {formatTimeAgo(fullDataUpdatedAt)}</>
                 ) : showFullCache ? (
@@ -455,7 +482,7 @@ export const DriveVisualizer = () => {
                   if (showQuickCache) handleRefreshCache('quick_scan');
                   if (showFullCache) handleFullScan();
                 }}
-                className="text-amber-700 hover:text-amber-900 underline text-xs whitespace-nowrap"
+                className="text-blue-700 hover:text-blue-900 underline text-xs whitespace-nowrap"
               >
                 Refresh
               </button>
@@ -722,6 +749,7 @@ export const DriveVisualizer = () => {
                   <option value="storage-dashboard">Storage Dashboard</option>
                   <option value="large-files">Large Files Finder</option>
                   <option value="duplicate-finder">Duplicate Finder</option>
+                  <option value="stale-files">Stale Files</option>
                   <option value="file-age">File Age Analysis</option>
                   <option value="folder-depth">Folder Depth Analysis</option>
                   <option value="activity-timeline">Activity Timeline</option>

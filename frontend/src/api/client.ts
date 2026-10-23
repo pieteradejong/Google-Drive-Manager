@@ -5,7 +5,10 @@ import type {
   HealthResponse, 
   QuickScanResponse,
   FullScanStatusResponse,
-  FullScanCacheStatusResponse
+  FullScanCacheStatusResponse,
+  DagResponse,
+  DagStatusResponse,
+  DagNodeResponse
 } from '../types/drive';
 import { measureAsync } from '../utils/performance';
 
@@ -163,6 +166,58 @@ export const api = {
       const response = await apiClient.get(`/api/analytics/view/${view}`, { params });
       return response.data;
     }, 500);
+  },
+
+  // =============================================================================
+  // DAG API Methods
+  // =============================================================================
+
+  /** Get DAG status (fast check without loading full DAG) */
+  getDagStatus: async (): Promise<DagStatusResponse> => {
+    return measureAsync('API: dagStatus', async () => {
+      const response = await apiClient.get<DagStatusResponse>('/api/dag/status');
+      return response.data;
+    }, 100);
+  },
+
+  /** Get full pre-computed DAG from backend */
+  getDag: async (): Promise<DagResponse | null> => {
+    try {
+      return await measureAsync('API: getDag', async () => {
+        const response = await apiClient.get<DagResponse>('/api/dag');
+        return response.data;
+      }, 2000);
+    } catch (e) {
+      // 404 means no DAG computed yet - return null
+      if (axios.isAxiosError(e) && e.response?.status === 404) {
+        return null;
+      }
+      throw e;
+    }
+  },
+
+  /** Get a single DAG node by ID with its neighbors */
+  getDagNode: async (nodeId: string): Promise<DagNodeResponse | null> => {
+    try {
+      return await measureAsync(`API: getDagNode:${nodeId}`, async () => {
+        const response = await apiClient.get<DagNodeResponse>(`/api/dag/node/${nodeId}`);
+        return response.data;
+      }, 200);
+    } catch (e) {
+      // 404 means node not found
+      if (axios.isAxiosError(e) && e.response?.status === 404) {
+        return null;
+      }
+      throw e;
+    }
+  },
+
+  /** Trigger DAG recomputation */
+  recomputeDag: async (): Promise<{ status: string; node_count: number }> => {
+    return measureAsync('API: recomputeDag', async () => {
+      const response = await apiClient.post('/api/dag/recompute');
+      return response.data;
+    }, 5000); // Higher threshold for potentially slow operation
   },
 };
 

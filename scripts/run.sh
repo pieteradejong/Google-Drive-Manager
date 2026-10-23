@@ -65,12 +65,41 @@ check_requirements() {
     fi
 }
 
-# Check if port is in use
+# Check if port is in use and optionally kill the process
 check_port() {
     local port=$1
-    if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1 ; then
-        echo -e "${RED}Error: Port $port is already in use${NC}"
-        exit 1
+    local pids=$(lsof -Pi :$port -sTCP:LISTEN -t 2>/dev/null)
+    
+    if [ ! -z "$pids" ]; then
+        echo -e "${YELLOW}Warning: Port $port is already in use${NC}"
+        echo -e "${CYAN}Processes using port $port:${NC}"
+        for pid in $pids; do
+            local cmd=$(ps -p $pid -o command= 2>/dev/null || echo "unknown")
+            echo -e "  PID $pid: ${cmd:0:80}"
+        done
+        echo ""
+        echo -e "${YELLOW}Attempting to kill existing processes on port $port...${NC}"
+        for pid in $pids; do
+            if kill $pid 2>/dev/null; then
+                echo -e "${GREEN}  ✓ Killed process $pid${NC}"
+            else
+                echo -e "${RED}  ✗ Failed to kill process $pid (may require sudo)${NC}"
+            fi
+        done
+        
+        # Wait a moment for port to be released
+        sleep 1
+        
+        # Check again
+        if lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
+            echo -e "${RED}Error: Port $port is still in use. Please kill the processes manually:${NC}"
+            echo -e "${CYAN}  kill $pids${NC}"
+            echo -e "${CYAN}  Or: lsof -ti :$port | xargs kill${NC}"
+            exit 1
+        else
+            echo -e "${GREEN}✓ Port $port is now available${NC}"
+            echo ""
+        fi
     fi
 }
 

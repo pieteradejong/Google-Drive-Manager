@@ -117,6 +117,8 @@ class FullScanCacheStatusResponse(BaseModel):
     total_size: Optional[int] = None
     cache_version: Optional[int] = None
     reason: Optional[str] = None  # e.g. missing | invalid_or_expired | ok
+    age_seconds: Optional[int] = None  # Age of cache in seconds
+    is_stale: bool = False  # True if cache is older than staleness threshold (7 days)
 
 
 class AnalyticsStatusResponse(BaseModel):
@@ -140,3 +142,102 @@ class AnalyticsViewResponse(BaseModel):
     derived_version: int
     computed_at: str
     data: Dict[str, Any]
+
+
+# =============================================================================
+# DAG-related models
+# =============================================================================
+
+
+class DagNodeInfo(BaseModel):
+    """Information about a single DAG node."""
+
+    id: str
+    name: str
+    mimeType: str
+    isFolder: bool
+    ownedByMe: bool
+    depth: int
+    parents: List[str]
+    children: List[str]
+    size: Optional[int] = None
+
+
+class DagWarnings(BaseModel):
+    """Warnings generated during DAG computation."""
+
+    missingParentRefs: int = 0
+    duplicateEdges: int = 0
+    cycleDetected: bool = False
+    cycleNodeCount: int = 0
+    notes: List[str] = Field(default_factory=list)
+
+
+class DagOwnershipStats(BaseModel):
+    """Ownership statistics for the DAG."""
+
+    ownedCount: int = 0
+    sharedCount: int = 0
+    ownedSizeBytes: int = 0
+    sharedSizeBytes: int = 0
+
+
+class DagMeta(BaseModel):
+    """Metadata about the computed DAG."""
+
+    computed_at: str
+    node_count: int
+    edge_count: int
+    root_count: int
+
+
+class DagEdge(BaseModel):
+    """A directed edge in the DAG from parent to child."""
+
+    # Using Field with alias for JSON serialization compatibility
+    from_id: str = Field(..., alias="from")
+    to_id: str = Field(..., alias="to")
+
+    model_config = {"populate_by_name": True}
+
+
+class DagResponse(BaseModel):
+    """Response model for /api/dag endpoint."""
+
+    nodes: List[DagNodeInfo]
+    edges: List[Dict[str, str]]  # List of {"from": id, "to": id}
+    roots: List[str]
+    topoOrder: List[str]
+    maxDepth: int
+    warnings: DagWarnings
+    ownershipStats: DagOwnershipStats
+    meta: DagMeta
+
+
+class DagStatusResponse(BaseModel):
+    """Status/metadata for the DAG without loading the full data."""
+
+    exists: bool
+    computed_at: Optional[str] = None
+    node_count: Optional[int] = None
+    edge_count: Optional[int] = None
+    root_count: Optional[int] = None
+    max_depth: Optional[int] = None
+    is_stale: bool = False
+
+
+class DagNodeResponse(BaseModel):
+    """Response model for /api/dag/node/{id} endpoint."""
+
+    id: str
+    name: str
+    mimeType: str
+    isFolder: bool
+    ownedByMe: bool
+    depth: int
+    parents: List[str]
+    children: List[str]
+    size: Optional[int] = None
+    isRoot: bool = False
+    childrenCount: int = 0
+    topoOrder: Optional[int] = None

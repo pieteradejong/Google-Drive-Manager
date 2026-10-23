@@ -32,6 +32,13 @@ from .models import (
     FullScanCacheStatusResponse,
     AnalyticsStatusResponse,
     AnalyticsViewResponse,
+    DagResponse,
+    DagStatusResponse,
+    DagNodeResponse,
+    DagNodeInfo,
+    DagWarnings,
+    DagOwnershipStats,
+    DagMeta,
 )
 from .cache import (
     load_cache,
@@ -758,35 +765,24 @@ async def invalidate_cache(scan_type: Optional[str] = None) -> Dict[str, str]:
 @app.get("/api/scan/full/cached", response_model=ScanResponse)
 async def get_cached_full_scan() -> ScanResponse:
     """
-    Get cached full scan data if available and valid.
+    Get cached full scan data if available.
 
-    This endpoint returns cached data immediately without starting a scan.
+    This endpoint returns cached data immediately without validation.
+    Staleness warnings are handled by the frontend based on cache metadata.
     Use this for instant page load when cache exists.
 
     Returns:
         ScanResponse with cached files, children_map, and stats
 
     Raises:
-        404: No valid cache available
+        404: No cached data available
     """
     try:
-        # Fast path: read sidecar metadata first (avoid loading huge JSON unless valid)
-        metadata = get_cache_metadata("full_scan")
-        if not metadata:
-            raise HTTPException(status_code=404, detail="No cached data available")
-
-        service = get_service()
-
-        # Validate cache using same logic as start_full_scan
-        if not validate_cache_with_drive(
-            service, metadata, max_age_seconds=2592000
-        ):  # 30 days
-            raise HTTPException(status_code=404, detail="Cache expired or invalid")
-
-        # Only load the full cached payload if it's valid
+        # Load cached data immediately without Drive API validation
+        # The frontend handles staleness warnings based on cache metadata
         cache_data = load_cache("full_scan")
         if not cache_data:
-            raise HTTPException(status_code=404, detail="Cache unavailable")
+            raise HTTPException(status_code=404, detail="No cached data available")
 
         # Kick off analytics compute if needed (background)
         try:
@@ -817,17 +813,33 @@ async def get_full_scan_cache_status() -> FullScanCacheStatusResponse:
     - Reads only the sidecar metadata file (tiny)
     - Uses time-based validation only (no Drive API calls)
     - Returns reason: missing | ttl_fresh | ttl_expired
+    - Includes age_seconds and is_stale for frontend staleness warnings
 
     For Drive-based validation, use /api/scan/full/cache/validate endpoint.
     """
+    from datetime import datetime, timezone
+
     meta = get_cache_metadata("full_scan")
     if not meta:
         return FullScanCacheStatusResponse(exists=False, valid=False, reason="missing")
 
+    # Compute cache age
+    age_seconds = None
+    is_stale = False
+    staleness_threshold_seconds = 7 * 24 * 60 * 60  # 7 days
+
+    try:
+        cache_time = datetime.fromisoformat(meta.timestamp.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        age_seconds = int((now - cache_time).total_seconds())
+        is_stale = age_seconds > staleness_threshold_seconds
+    except Exception:
+        pass  # If timestamp parsing fails, leave age_seconds as None
+
     # Fast TTL-based check only (no Drive API call)
     max_age_seconds = 2592000  # 30 days
     ttl_valid = is_cache_valid_time_based(meta, max_age_seconds)
-    
+
     return FullScanCacheStatusResponse(
         exists=True,
         valid=ttl_valid,
@@ -836,6 +848,8 @@ async def get_full_scan_cache_status() -> FullScanCacheStatusResponse:
         total_size=meta.total_size,
         cache_version=meta.cache_version,
         reason="ttl_fresh" if ttl_valid else "ttl_expired",
+        age_seconds=age_seconds,
+        is_stale=is_stale,
     )
 
 
@@ -850,9 +864,24 @@ async def validate_full_scan_cache() -> FullScanCacheStatusResponse:
     Returns:
         FullScanCacheStatusResponse with Drive-validated status
     """
+    from datetime import datetime, timezone
+
     meta = get_cache_metadata("full_scan")
     if not meta:
         return FullScanCacheStatusResponse(exists=False, valid=False, reason="missing")
+
+    # Compute cache age
+    age_seconds = None
+    is_stale = False
+    staleness_threshold_seconds = 7 * 24 * 60 * 60  # 7 days
+
+    try:
+        cache_time = datetime.fromisoformat(meta.timestamp.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        age_seconds = int((now - cache_time).total_seconds())
+        is_stale = age_seconds > staleness_threshold_seconds
+    except Exception:
+        pass
 
     try:
         service = get_service()
@@ -866,6 +895,8 @@ async def validate_full_scan_cache() -> FullScanCacheStatusResponse:
             total_size=meta.total_size,
             cache_version=meta.cache_version,
             reason="ok" if valid else "invalid_or_expired",
+            age_seconds=age_seconds,
+            is_stale=is_stale,
         )
     except Exception as e:
         # If we can't validate (e.g. auth/network), report existence but invalid
@@ -877,6 +908,8 @@ async def validate_full_scan_cache() -> FullScanCacheStatusResponse:
             total_size=meta.total_size,
             cache_version=meta.cache_version,
             reason=f"error:{str(e)}",
+            age_seconds=age_seconds,
+            is_stale=is_stale,
         )
 
 
@@ -1682,3 +1715,172 @@ async def clear_index() -> Dict[str, str]:
     except Exception as e:
         perf_logger.error("clear_index", message=str(e))
         raise HTTPException(status_code=500, detail=f"Error clearing index: {str(e)}")
+
+
+# =============================================================================
+# DAG Endpoints (Pre-computed DAG from SQLite)
+# =============================================================================
+
+
+@app.get("/api/dag/status", response_model=DagStatusResponse)
+async def get_dag_status() -> DagStatusResponse:
+    """
+    Get DAG status without loading the full data.
+
+    Fast endpoint for checking if DAG exists and its metadata.
+
+    Returns:
+        DagStatusResponse with exists, computed_at, counts, and staleness
+    """
+    from .dag_compute import get_dag_metadata, is_dag_stale
+    from .index_db import get_db_path
+
+    db_path = get_db_path()
+
+    try:
+        meta = get_dag_metadata(db_path)
+
+        if not meta:
+            return DagStatusResponse(exists=False, is_stale=True)
+
+        stale = is_dag_stale(db_path)
+
+        return DagStatusResponse(
+            exists=True,
+            computed_at=meta.computed_at,
+            node_count=meta.node_count,
+            edge_count=meta.edge_count,
+            root_count=meta.root_count,
+            max_depth=meta.max_depth,
+            is_stale=stale,
+        )
+
+    except Exception as e:
+        perf_logger.error("get_dag_status", message=str(e))
+        return DagStatusResponse(exists=False, is_stale=True)
+
+
+@app.get("/api/dag", response_model=DagResponse)
+async def get_dag() -> DagResponse:
+    """
+    Get the full pre-computed DAG for frontend consumption.
+
+    Returns the complete DAG structure including nodes, edges, roots,
+    topological order, warnings, and ownership statistics.
+
+    Returns:
+        DagResponse with full DAG data
+
+    Raises:
+        404: If no DAG has been computed
+    """
+    from .dag_compute import load_dag_for_api
+    from .index_db import get_db_path
+
+    db_path = get_db_path()
+
+    try:
+        dag_data = load_dag_for_api(db_path)
+
+        if not dag_data:
+            raise HTTPException(
+                status_code=404,
+                detail="No DAG computed. Run a crawl or sync first.",
+            )
+
+        # Convert to response model
+        nodes = [DagNodeInfo(**n) for n in dag_data["nodes"]]
+        warnings = DagWarnings(**dag_data["warnings"])
+        ownership = DagOwnershipStats(**dag_data["ownershipStats"])
+        meta = DagMeta(**dag_data["meta"])
+
+        return DagResponse(
+            nodes=nodes,
+            edges=dag_data["edges"],
+            roots=dag_data["roots"],
+            topoOrder=dag_data["topoOrder"],
+            maxDepth=dag_data["maxDepth"],
+            warnings=warnings,
+            ownershipStats=ownership,
+            meta=meta,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        perf_logger.error("get_dag", message=str(e))
+        raise HTTPException(status_code=500, detail=f"Error loading DAG: {str(e)}")
+
+
+@app.get("/api/dag/node/{node_id}", response_model=DagNodeResponse)
+async def get_dag_node(node_id: str) -> DagNodeResponse:
+    """
+    Get a single DAG node with its neighbors.
+
+    Returns:
+        DagNodeResponse with node info including parents and children
+
+    Raises:
+        404: If node not found
+    """
+    from .dag_compute import load_dag_node_for_api
+    from .index_db import get_db_path
+
+    db_path = get_db_path()
+
+    try:
+        node_data = load_dag_node_for_api(node_id, db_path)
+
+        if not node_data:
+            raise HTTPException(status_code=404, detail=f"Node '{node_id}' not found")
+
+        return DagNodeResponse(**node_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        perf_logger.error("get_dag_node", message=str(e), node_id=node_id)
+        raise HTTPException(status_code=500, detail=f"Error loading node: {str(e)}")
+
+
+@app.post("/api/dag/recompute")
+async def recompute_dag() -> Dict[str, Any]:
+    """
+    Trigger DAG recomputation.
+
+    Forces a fresh DAG computation from the current SQLite index.
+    Useful if the DAG is stale or corrupted.
+
+    Returns:
+        Dict with computation results
+    """
+    from .dag_compute import compute_and_store_dag
+    from .index_db import get_db_path, database_exists
+
+    db_path = get_db_path()
+
+    if not database_exists(db_path):
+        raise HTTPException(
+            status_code=400,
+            detail="No index exists. Run a crawl first.",
+        )
+
+    try:
+        meta = compute_and_store_dag(db_path)
+
+        return {
+            "status": "complete",
+            "computed_at": meta.computed_at,
+            "node_count": meta.node_count,
+            "edge_count": meta.edge_count,
+            "root_count": meta.root_count,
+            "max_depth": meta.max_depth,
+            "warnings": meta.warnings.to_dict(),
+            "ownershipStats": meta.ownership_stats.to_dict(),
+        }
+
+    except Exception as e:
+        perf_logger.error("recompute_dag", message=str(e))
+        raise HTTPException(
+            status_code=500, detail=f"Error computing DAG: {str(e)}"
+        )

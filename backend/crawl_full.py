@@ -221,7 +221,30 @@ def run_full_crawl(
             set_sync_state(conn, "file_count", str(progress.total_files))
             conn.commit()
 
-        # Stage 5: Complete
+        # Stage 5: Compute DAG
+        progress.message = "Computing DAG..."
+        update_progress()
+
+        try:
+            from .dag_compute import compute_and_store_dag
+
+            dag_meta = compute_and_store_dag(path)
+            crawl_logger.info(
+                "run_full_crawl.dag_computed",
+                nodes=dag_meta.node_count,
+                edges=dag_meta.edge_count,
+                roots=dag_meta.root_count,
+                max_depth=dag_meta.max_depth,
+            )
+        except Exception as e:
+            crawl_logger.error(
+                "run_full_crawl.dag_compute_error",
+                message=str(e),
+            )
+            # DAG computation failure is non-fatal; crawl still succeeded
+            progress.message = f"Crawl complete, DAG compute failed: {str(e)}"
+
+        # Stage 6: Complete
         progress.stage = "complete"
         progress.completed_at = datetime.now(timezone.utc)
         progress.message = f"Crawl complete: {progress.total_files} files indexed"

@@ -245,7 +245,30 @@ def run_sync(
             )
             conn.commit()
 
-        # Stage 5: Complete
+        # Stage 5: Recompute DAG if there were any changes
+        if progress.files_added or progress.files_updated or progress.files_removed:
+            progress.message = "Recomputing DAG..."
+            update_progress()
+
+            try:
+                from .dag_compute import compute_and_store_dag
+
+                dag_meta = compute_and_store_dag(path)
+                sync_logger.info(
+                    "run_sync.dag_recomputed",
+                    nodes=dag_meta.node_count,
+                    edges=dag_meta.edge_count,
+                    roots=dag_meta.root_count,
+                    max_depth=dag_meta.max_depth,
+                )
+            except Exception as e:
+                sync_logger.error(
+                    "run_sync.dag_compute_error",
+                    message=str(e),
+                )
+                # DAG computation failure is non-fatal
+
+        # Stage 6: Complete
         progress.stage = "complete"
         progress.completed_at = datetime.now(timezone.utc)
 

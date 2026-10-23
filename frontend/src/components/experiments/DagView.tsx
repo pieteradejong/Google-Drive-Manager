@@ -1,9 +1,10 @@
 /** DAG Lab - Multiple views over a filesystem DAG */
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Search } from 'lucide-react';
+import { AlertTriangle, Search, RefreshCw, Clock } from 'lucide-react';
 import type { FileItem } from '../../types/drive';
-import { buildDriveDag } from '../../utils/driveDag';
+import { buildDriveDag, type DriveDag } from '../../utils/driveDag';
 import { LoadingState } from '../LoadingState';
+import { useDag } from '../../hooks/useDag';
 
 import type { DagFilters, DagTabId } from './dagTabs/types';
 import { TreeProjectionTab } from './dagTabs/TreeProjectionTab';
@@ -17,10 +18,13 @@ import { SankeyBySizeTab } from './dagTabs/SankeyBySizeTab';
 import { OrphansTab } from './dagTabs/OrphansTab';
 
 interface DagViewProps {
-  files: FileItem[];
-  childrenMap: Record<string, string[]>;
+  /** Files for fallback client-side DAG computation (optional if using backend DAG) */
+  files?: FileItem[];
+  childrenMap?: Record<string, string[]>;
   onFileClick?: (file: FileItem) => void;
   initialSelectedNodeId?: string;  // For navigation from other views (e.g., duplicate finder)
+  /** If true, use backend pre-computed DAG (default: true) */
+  useBackendDag?: boolean;
 }
 
 const TAB_DEFS: Array<{ id: DagTabId; label: string }> = [
@@ -47,39 +51,90 @@ const DEFAULT_FILTERS: DagFilters = {
   maxPaths: 20,
 };
 
-export const DagView = ({ files, onFileClick, initialSelectedNodeId }: DagViewProps) => {
+export const DagView = ({
+  files,
+  onFileClick,
+  initialSelectedNodeId,
+  useBackendDag = true,
+}: DagViewProps) => {
   const [activeTab, setActiveTab] = useState<DagTabId>('tree');
   const [filters, setFilters] = useState<DagFilters>(DEFAULT_FILTERS);
 
-  const dag = useMemo(() => buildDriveDag(files), [files]);
-  const fileById = useMemo(() => new Map(files.map((f) => [f.id, f])), [files]);
+  // Try to load DAG from backend
+  const {
+    dag: backendDag,
+    isLoading: isLoadingDag,
+    isError: isDagError,
+    isStale: isDagStale,
+    recompute,
+    refetch: refetchDag,
+  } = useDag();
+
+  // Fallback: compute DAG client-side if backend unavailable or disabled
+  const clientDag = useMemo(() => {
+    if (useBackendDag && backendDag) return null; // Don't compute if backend is available
+    if (!files || files.length === 0) return null;
+    return buildDriveDag(files);
+  }, [files, useBackendDag, backendDag]);
+
+  // Use backend DAG if available, otherwise fallback to client-computed
+  const dag: DriveDag | null = useBackendDag ? backendDag : clientDag;
+
+  // Build fileById map from dag nodes (for compatibility with tab components)
+  const fileById = useMemo(() => {
+    if (!dag) return new Map<string, FileItem>();
+
+    const map = new Map<string, FileItem>();
+    for (const [id, node] of dag.nodesById) {
+      // Use the file object from node, or construct a minimal FileItem
+      if (node.file) {
+        map.set(id, node.file as FileItem);
+      } else {
+        map.set(id, {
+          id: node.id,
+          name: node.name,
+          mimeType: node.mimeType,
+          parents: node.parents,
+          ownedByMe: node.ownedByMe,
+        });
+      }
+    }
+    return map;
+  }, [dag]);
+
+  // Build files array from dag nodes for compatibility
+  const effectiveFiles = useMemo(() => {
+    if (files && files.length > 0) return files;
+    return Array.from(fileById.values());
+  }, [files, fileById]);
 
   const [selectedNodeId, setSelectedNodeId] = useState<string>(initialSelectedNodeId || '');
   const [selectedRootIds, setSelectedRootIds] = useState<string[]>(initialSelectedNodeId ? [initialSelectedNodeId] : []);
 
   // Handle external navigation (when initialSelectedNodeId changes)
   useEffect(() => {
-    if (initialSelectedNodeId && dag.nodesById.has(initialSelectedNodeId)) {
+    if (initialSelectedNodeId && dag?.nodesById.has(initialSelectedNodeId)) {
       setSelectedNodeId(initialSelectedNodeId);
       setSelectedRootIds([initialSelectedNodeId]);
       // Switch to ego tab for focused view of the target node
       setActiveTab('ego');
     }
-  }, [initialSelectedNodeId, dag.nodesById]);
+  }, [initialSelectedNodeId, dag?.nodesById]);
 
   // Initialize defaults once data is available (only if no initial selection)
   useEffect(() => {
-    if (dag.roots.length === 0) return;
+    if (!dag || dag.roots.length === 0) return;
     // Don't override if we have an external selection
     if (initialSelectedNodeId && dag.nodesById.has(initialSelectedNodeId)) return;
 
     setSelectedRootIds((prev) => (prev.length > 0 ? prev : [dag.roots[0]]));
     setSelectedNodeId((prev) => (prev && dag.nodesById.has(prev) ? prev : dag.roots[0]));
-  }, [dag.roots, dag.nodesById, initialSelectedNodeId]);
+  }, [dag, initialSelectedNodeId]);
 
   const [searchQuery, setSearchQuery] = useState('');
 
   const searchResults = useMemo(() => {
+    if (!dag) return [] as Array<{ id: string; name: string }>;
     const q = searchQuery.trim().toLowerCase();
     if (!q) return [] as Array<{ id: string; name: string }>;
 
@@ -92,18 +147,19 @@ export const DagView = ({ files, onFileClick, initialSelectedNodeId }: DagViewPr
       }
     }
     return out;
-  }, [searchQuery, dag.nodesById]);
+  }, [searchQuery, dag]);
 
   const effectiveSelectedRoots = useMemo(() => {
+    if (!dag) return [];
     const valid = selectedRootIds.filter((id) => dag.nodesById.has(id));
     return valid.length > 0 ? valid : dag.roots.slice(0, 1);
-  }, [selectedRootIds, dag.roots, dag.nodesById]);
+  }, [selectedRootIds, dag]);
 
   const tabProps = {
-    dag,
-    files,
+    dag: dag!,
+    files: effectiveFiles,
     fileById,
-    selectedNodeId: selectedNodeId && dag.nodesById.has(selectedNodeId) ? selectedNodeId : effectiveSelectedRoots[0] || '',
+    selectedNodeId: selectedNodeId && dag?.nodesById.has(selectedNodeId) ? selectedNodeId : effectiveSelectedRoots[0] || '',
     setSelectedNodeId: (id: string) => setSelectedNodeId(id),
     selectedRootIds: effectiveSelectedRoots,
     setSelectedRootIds: (ids: string[]) => setSelectedRootIds(ids),
@@ -112,19 +168,64 @@ export const DagView = ({ files, onFileClick, initialSelectedNodeId }: DagViewPr
     onFileClick,
   };
 
-  if (!files || files.length === 0) {
+  // Loading state
+  if (useBackendDag && isLoadingDag) {
+    return <LoadingState operation="Loading DAG" details="Fetching pre-computed DAG from server..." />;
+  }
+
+  // Error state with retry
+  if (useBackendDag && isDagError) {
     return (
       <div className="flex items-center justify-center h-full bg-gray-50">
         <div className="text-center text-gray-500">
-          <p className="text-lg font-medium mb-2">No data to display</p>
-          <p className="text-sm">Run a full scan to build the DAG</p>
+          <p className="text-lg font-medium mb-2 text-red-600">Failed to load DAG</p>
+          <p className="text-sm mb-4">Could not fetch the DAG from the server.</p>
+          <button
+            onClick={() => refetchDag()}
+            className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 mx-auto"
+          >
+            <RefreshCw size={16} />
+            Retry
+          </button>
         </div>
       </div>
     );
   }
 
+  // No data state
   if (!dag || dag.nodesById.size === 0) {
-    return <LoadingState operation="Building DAG" details={`Processing ${files.length.toLocaleString()} items...`} />;
+    // If using backend and no DAG, show helpful message
+    if (useBackendDag) {
+      return (
+        <div className="flex items-center justify-center h-full bg-gray-50">
+          <div className="text-center text-gray-500">
+            <p className="text-lg font-medium mb-2">No DAG data available</p>
+            <p className="text-sm mb-4">Run a full crawl to build the DAG.</p>
+            <button
+              onClick={() => recompute()}
+              className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 mx-auto"
+            >
+              <RefreshCw size={16} />
+              Compute DAG
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    // Fallback mode: check if files are available
+    if (!effectiveFiles || effectiveFiles.length === 0) {
+      return (
+        <div className="flex items-center justify-center h-full bg-gray-50">
+          <div className="text-center text-gray-500">
+            <p className="text-lg font-medium mb-2">No data to display</p>
+            <p className="text-sm">Run a full scan to build the DAG</p>
+          </div>
+        </div>
+      );
+    }
+
+    return <LoadingState operation="Building DAG" details={`Processing ${effectiveFiles.length.toLocaleString()} items...`} />;
   }
 
   const renderActiveTab = () => {
@@ -164,19 +265,37 @@ export const DagView = ({ files, onFileClick, initialSelectedNodeId }: DagViewPr
             </p>
           </div>
 
-          {dag.warnings.notes.length > 0 && (
-            <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
-              <AlertTriangle size={18} className="text-amber-700 mt-0.5" />
-              <div className="text-xs text-amber-900">
-                <div className="font-semibold">Notes</div>
-                <ul className="list-disc list-inside">
-                  {dag.warnings.notes.slice(0, 3).map((n) => (
-                    <li key={n}>{n}</li>
-                  ))}
-                </ul>
+          <div className="flex items-center gap-2">
+            {/* Stale DAG warning */}
+            {useBackendDag && isDagStale && (
+              <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <Clock size={16} className="text-amber-700" />
+                <span className="text-xs text-amber-900">DAG may be stale</span>
+                <button
+                  onClick={() => recompute()}
+                  className="ml-2 px-2 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-700 flex items-center gap-1"
+                >
+                  <RefreshCw size={12} />
+                  Refresh
+                </button>
               </div>
-            </div>
-          )}
+            )}
+
+            {/* DAG warnings */}
+            {dag.warnings.notes.length > 0 && (
+              <div className="flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                <AlertTriangle size={18} className="text-amber-700 mt-0.5" />
+                <div className="text-xs text-amber-900">
+                  <div className="font-semibold">Notes</div>
+                  <ul className="list-disc list-inside">
+                    {dag.warnings.notes.slice(0, 3).map((n) => (
+                      <li key={n}>{n}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Summary */}

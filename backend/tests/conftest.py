@@ -984,3 +984,176 @@ def sample_files_undefined_ownership():
             # Note: ownedByMe is NOT present
         },
     ]
+
+
+# =============================================================================
+# DAG Fixtures
+# =============================================================================
+
+
+@pytest.fixture
+def computed_dag_db(populated_db):
+    """Database with pre-computed DAG."""
+    from backend.dag_compute import compute_and_store_dag
+
+    compute_and_store_dag(populated_db)
+    return populated_db
+
+
+@pytest.fixture
+def sample_dag_tree():
+    """
+    Sample file structure for DAG testing.
+
+    Structure:
+        root/
+        ├── folder1/
+        │   ├── file1.txt
+        │   └── subfolder/
+        │       └── file2.txt
+        ├── folder2/
+        │   └── file3.txt (also in folder1 - multi-parent)
+        └── orphan.txt (no parent in dataset)
+    """
+    return [
+        {
+            "id": "root",
+            "name": "My Drive",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": [],
+            "ownedByMe": True,
+        },
+        {
+            "id": "folder1",
+            "name": "Folder 1",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": ["root"],
+            "ownedByMe": True,
+        },
+        {
+            "id": "folder2",
+            "name": "Folder 2",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": ["root"],
+            "ownedByMe": True,
+        },
+        {
+            "id": "subfolder",
+            "name": "Subfolder",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": ["folder1"],
+            "ownedByMe": True,
+        },
+        {
+            "id": "file1",
+            "name": "file1.txt",
+            "mimeType": "text/plain",
+            "size": "1000",
+            "parents": ["folder1"],
+            "ownedByMe": True,
+        },
+        {
+            "id": "file2",
+            "name": "file2.txt",
+            "mimeType": "text/plain",
+            "size": "2000",
+            "parents": ["subfolder"],
+            "ownedByMe": True,
+        },
+        {
+            "id": "file3",
+            "name": "file3.txt",
+            "mimeType": "text/plain",
+            "size": "3000",
+            "parents": ["folder1", "folder2"],
+            "ownedByMe": False,
+        },
+        {
+            "id": "orphan",
+            "name": "orphan.txt",
+            "mimeType": "text/plain",
+            "size": "500",
+            "parents": ["missing_parent"],
+            "ownedByMe": True,
+        },
+    ]
+
+
+@pytest.fixture
+def cycle_dag_tree():
+    """
+    Sample file structure with a cycle for testing.
+
+    A -> B -> C -> A (cycle)
+    """
+    return [
+        {
+            "id": "a",
+            "name": "A",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": ["c"],
+            "ownedByMe": True,
+        },
+        {
+            "id": "b",
+            "name": "B",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": ["a"],
+            "ownedByMe": True,
+        },
+        {
+            "id": "c",
+            "name": "C",
+            "mimeType": "application/vnd.google-apps.folder",
+            "parents": ["b"],
+            "ownedByMe": True,
+        },
+    ]
+
+
+@pytest.fixture
+def dag_db_with_tree(initialized_db, sample_dag_tree):
+    """Database populated with sample_dag_tree files."""
+    from backend.index_db import (
+        get_connection,
+        upsert_file,
+        replace_parents,
+        set_sync_state,
+    )
+
+    with get_connection(initialized_db) as conn:
+        for file_dict in sample_dag_tree:
+            upsert_file(conn, file_dict)
+            file_id = file_dict.get("id")
+            parents = file_dict.get("parents", [])
+            if file_id:
+                replace_parents(conn, file_id, parents)
+
+        set_sync_state(conn, "start_page_token", "test_token")
+        conn.commit()
+
+    return initialized_db
+
+
+@pytest.fixture
+def dag_db_with_cycle(initialized_db, cycle_dag_tree):
+    """Database populated with cycle_dag_tree files."""
+    from backend.index_db import (
+        get_connection,
+        upsert_file,
+        replace_parents,
+        set_sync_state,
+    )
+
+    with get_connection(initialized_db) as conn:
+        for file_dict in cycle_dag_tree:
+            upsert_file(conn, file_dict)
+            file_id = file_dict.get("id")
+            parents = file_dict.get("parents", [])
+            if file_id:
+                replace_parents(conn, file_id, parents)
+
+        set_sync_state(conn, "start_page_token", "test_token")
+        conn.commit()
+
+    return initialized_db

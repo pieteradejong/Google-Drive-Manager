@@ -396,13 +396,19 @@ run_dag_tests() {
     
     # Backend DAG tests
     if [ -d "venv" ] && [ -f "backend/main.py" ]; then
-        echo -e "${CYAN}Backend DAG integration tests...${NC}"
+        echo -e "${CYAN}Backend DAG unit tests...${NC}"
         source venv/bin/activate
         
+        # Run DAG compute tests
+        if [ -f "backend/tests/test_dag_compute.py" ]; then
+            python -m pytest backend/tests/test_dag_compute.py -v --tb=short || EXIT_CODE=1
+        else
+            echo -e "${YELLOW}No backend DAG compute tests found${NC}"
+        fi
+        
+        # Run DAG root integration tests
         if [ -f "backend/tests/test_dag_root_integration.py" ]; then
             python -m pytest backend/tests/test_dag_root_integration.py -v --tb=short || EXIT_CODE=1
-        else
-            echo -e "${YELLOW}No backend DAG tests found${NC}"
         fi
         
         deactivate
@@ -420,6 +426,128 @@ run_dag_tests() {
         fi
         
         cd ..
+    fi
+    
+    echo ""
+}
+
+# Function to run DAG API integration tests
+run_dag_api_tests() {
+    echo -e "${BLUE}=== Running DAG API Integration Tests ===${NC}"
+    
+    # Check if backend is running
+    if ! curl -s http://localhost:8000/api/health > /dev/null 2>&1; then
+        echo -e "${YELLOW}Warning: Backend not running on port 8000. Skipping DAG API tests${NC}"
+        echo -e "${YELLOW}  Start backend with: ./run.sh backend${NC}"
+        return 1
+    fi
+    
+    # Test 1: DAG status endpoint (fast)
+    echo -e "${CYAN}Testing /api/dag/status...${NC}"
+    STATUS_START_TIME=$(date +%s%N)
+    DAG_STATUS=$(curl -s http://localhost:8000/api/dag/status)
+    STATUS_END_TIME=$(date +%s%N)
+    STATUS_DURATION=$(( (STATUS_END_TIME - STATUS_START_TIME) / 1000000 ))
+    
+    if echo "$DAG_STATUS" | grep -q '"exists"'; then
+        echo -e "${GREEN}✓ DAG status endpoint working (${STATUS_DURATION}ms)${NC}"
+        DAG_EXISTS=$(echo "$DAG_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin).get('exists'))" 2>/dev/null || echo "unknown")
+        DAG_NODE_COUNT=$(echo "$DAG_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin).get('node_count') or 0)" 2>/dev/null || echo "0")
+        DAG_IS_STALE=$(echo "$DAG_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin).get('is_stale', False))" 2>/dev/null || echo "unknown")
+        echo -e "${CYAN}  exists=${DAG_EXISTS}, node_count=${DAG_NODE_COUNT}, is_stale=${DAG_IS_STALE}${NC}"
+        
+        # Performance check - status should be very fast
+        if [ $STATUS_DURATION -lt 100 ]; then
+            echo -e "${GREEN}  ✓ Status check is fast (<100ms)${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ Status check took ${STATUS_DURATION}ms (expected <100ms)${NC}"
+        fi
+    else
+        echo -e "${RED}✗ DAG status endpoint failed${NC}"
+        echo -e "${YELLOW}  Response: ${DAG_STATUS:0:200}...${NC}"
+        EXIT_CODE=1
+    fi
+    
+    # Test 2: Full DAG endpoint (if DAG exists)
+    if [ "$DAG_EXISTS" = "True" ]; then
+        echo -e "${CYAN}Testing /api/dag (full DAG load)...${NC}"
+        DAG_START_TIME=$(date +%s%N)
+        DAG_RESPONSE=$(curl -s http://localhost:8000/api/dag)
+        DAG_END_TIME=$(date +%s%N)
+        DAG_DURATION=$(( (DAG_END_TIME - DAG_START_TIME) / 1000000 ))
+        
+        if echo "$DAG_RESPONSE" | grep -q '"nodes"' && echo "$DAG_RESPONSE" | grep -q '"edges"'; then
+            echo -e "${GREEN}✓ DAG endpoint working (${DAG_DURATION}ms)${NC}"
+            
+            # Parse DAG stats
+            NODE_COUNT=$(echo "$DAG_RESPONSE" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('nodes', [])))" 2>/dev/null || echo "?")
+            EDGE_COUNT=$(echo "$DAG_RESPONSE" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('edges', [])))" 2>/dev/null || echo "?")
+            ROOT_COUNT=$(echo "$DAG_RESPONSE" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('roots', [])))" 2>/dev/null || echo "?")
+            MAX_DEPTH=$(echo "$DAG_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('maxDepth', 0))" 2>/dev/null || echo "?")
+            echo -e "${CYAN}  nodes=${NODE_COUNT}, edges=${EDGE_COUNT}, roots=${ROOT_COUNT}, maxDepth=${MAX_DEPTH}${NC}"
+            
+            # Validate DAG structure
+            if [ "$NODE_COUNT" != "?" ] && [ "$NODE_COUNT" -gt 0 ]; then
+                echo -e "${GREEN}  ✓ DAG structure valid (has nodes)${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ DAG may be empty${NC}"
+            fi
+            
+            # Performance check
+            if [ $DAG_DURATION -lt 2000 ]; then
+                echo -e "${GREEN}  ✓ DAG load is fast (<2s)${NC}"
+            else
+                echo -e "${YELLOW}  ⚠ DAG load took ${DAG_DURATION}ms (may be slow for large DAGs)${NC}"
+            fi
+            
+            # Test 3: Individual node endpoint
+            if [ "$NODE_COUNT" != "?" ] && [ "$NODE_COUNT" -gt 0 ]; then
+                echo -e "${CYAN}Testing /api/dag/node/{id}...${NC}"
+                FIRST_NODE_ID=$(echo "$DAG_RESPONSE" | python3 -c "import sys, json; nodes=json.load(sys.stdin).get('nodes', []); print(nodes[0]['id'] if nodes else '')" 2>/dev/null || echo "")
+                if [ -n "$FIRST_NODE_ID" ]; then
+                    NODE_RESPONSE=$(curl -s "http://localhost:8000/api/dag/node/${FIRST_NODE_ID}")
+                    if echo "$NODE_RESPONSE" | grep -q '"id"' && echo "$NODE_RESPONSE" | grep -q '"depth"'; then
+                        echo -e "${GREEN}✓ DAG node endpoint working${NC}"
+                        NODE_DEPTH=$(echo "$NODE_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('depth', 0))" 2>/dev/null || echo "?")
+                        NODE_CHILDREN=$(echo "$NODE_RESPONSE" | python3 -c "import sys, json; print(len(json.load(sys.stdin).get('children', [])))" 2>/dev/null || echo "?")
+                        echo -e "${CYAN}  node_id=${FIRST_NODE_ID:0:20}..., depth=${NODE_DEPTH}, children=${NODE_CHILDREN}${NC}"
+                    else
+                        echo -e "${RED}✗ DAG node endpoint failed${NC}"
+                        EXIT_CODE=1
+                    fi
+                fi
+            fi
+        else
+            echo -e "${RED}✗ DAG endpoint failed${NC}"
+            echo -e "${YELLOW}  Response: ${DAG_RESPONSE:0:200}...${NC}"
+            EXIT_CODE=1
+        fi
+    else
+        echo -e "${YELLOW}Skipping full DAG test (no DAG computed yet)${NC}"
+        echo -e "${CYAN}  Run a crawl first: POST /api/index/crawl/start${NC}"
+    fi
+    
+    # Test 4: DAG recompute endpoint
+    echo -e "${CYAN}Testing /api/dag/recompute...${NC}"
+    # Only run if index exists
+    INDEX_STATUS=$(curl -s http://localhost:8000/api/index/status)
+    INDEX_READY=$(echo "$INDEX_STATUS" | python3 -c "import sys, json; print(json.load(sys.stdin).get('status') == 'ready')" 2>/dev/null || echo "False")
+    
+    if [ "$INDEX_READY" = "True" ]; then
+        RECOMPUTE_START=$(date +%s%N)
+        RECOMPUTE_RESPONSE=$(curl -s -X POST http://localhost:8000/api/dag/recompute)
+        RECOMPUTE_END=$(date +%s%N)
+        RECOMPUTE_DURATION=$(( (RECOMPUTE_END - RECOMPUTE_START) / 1000000 ))
+        
+        if echo "$RECOMPUTE_RESPONSE" | grep -q '"status":"complete"'; then
+            echo -e "${GREEN}✓ DAG recompute endpoint working (${RECOMPUTE_DURATION}ms)${NC}"
+            NEW_NODE_COUNT=$(echo "$RECOMPUTE_RESPONSE" | python3 -c "import sys, json; print(json.load(sys.stdin).get('node_count', 0))" 2>/dev/null || echo "?")
+            echo -e "${CYAN}  Recomputed DAG with ${NEW_NODE_COUNT} nodes${NC}"
+        else
+            echo -e "${YELLOW}⚠ DAG recompute returned: ${RECOMPUTE_RESPONSE:0:100}${NC}"
+        fi
+    else
+        echo -e "${YELLOW}Skipping DAG recompute test (no index data)${NC}"
     fi
     
     echo ""
@@ -476,6 +604,7 @@ print_help() {
     echo "  visualization Run visualization safety tests"
     echo "  cache         Run cache loading tests"
     echo "  dag           Run DAG & ownership tests"
+    echo "  dag-api       Run DAG API integration tests (requires running backend)"
     echo "  logger        Run logger utility tests"
     echo "  help          Show this help message"
     echo ""
@@ -483,7 +612,8 @@ print_help() {
     echo "  $0              # Run all tests"
     echo "  $0 backend      # Run only backend tests"
     echo "  $0 frontend     # Run only frontend tests"
-    echo "  $0 logger       # Run only logger tests"
+    echo "  $0 dag          # Run DAG unit tests"
+    echo "  $0 dag-api      # Run DAG API integration tests"
 }
 
 # Main logic
@@ -518,6 +648,9 @@ case $MODE in
     dag)
         run_dag_tests
         ;;
+    dag-api)
+        run_dag_api_tests
+        ;;
     logger)
         run_logger_tests
         ;;
@@ -530,6 +663,7 @@ case $MODE in
         run_visualization_tests || true
         run_cache_tests || true
         run_dag_tests || true
+        run_dag_api_tests || true
         run_logger_tests || true
         ;;
 esac

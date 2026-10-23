@@ -1,5 +1,5 @@
 /** Hook for full scan with progress tracking using TanStack Query */
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useMemo } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../api/client';
 import { logger } from '../utils/logger';
@@ -11,6 +11,26 @@ export interface ScanTiming {
   estimatedRemaining: number | null; // in milliseconds
   isSlow: boolean;
 }
+
+/** Format cache age in seconds to a human-readable string */
+const formatCacheAge = (ageSeconds: number | undefined): string | null => {
+  if (ageSeconds === undefined || ageSeconds === null) return null;
+  
+  const minutes = Math.floor(ageSeconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  
+  if (days > 0) {
+    return days === 1 ? '1 day' : `${days} days`;
+  }
+  if (hours > 0) {
+    return hours === 1 ? '1 hour' : `${hours} hours`;
+  }
+  if (minutes > 0) {
+    return minutes === 1 ? '1 minute' : `${minutes} minutes`;
+  }
+  return 'just now';
+};
 
 export const useFullScan = () => {
   const queryClient = useQueryClient();
@@ -24,6 +44,7 @@ export const useFullScan = () => {
   const lastProgressRef = useRef<number | null>(null);
 
   // Fast cache status check (sidecar-first) to avoid loading huge cached payload on app load
+  // Always refetch on mount to ensure we check cache status on app startup
   const {
     data: cacheStatus,
     isLoading: isCacheStatusLoading,
@@ -33,11 +54,12 @@ export const useFullScan = () => {
     staleTime: 60 * 1000, // 1 minute
     gcTime: 10 * 60 * 1000, // keep for 10 minutes
     retry: 1,
-    refetchOnMount: false,
+    refetchOnMount: true, // Always check cache status on mount
   });
 
   // Load cached full scan immediately if cache exists (not waiting for validation)
-  const shouldFetchCachedFullScan = cacheStatus?.exists === true;
+  // Enable when cache exists OR when we're still checking (to avoid race condition)
+  const shouldFetchCachedFullScan = cacheStatus?.exists === true || (isCacheStatusLoading && cacheStatus === undefined);
 
   // Log cache status decision on startup
   useEffect(() => {
@@ -53,6 +75,7 @@ export const useFullScan = () => {
   }, [cacheStatus, shouldFetchCachedFullScan]);
 
   // Load cached full scan data immediately when cache exists (even if TTL expired)
+  // Try to load if cache status indicates cache exists, or if we're still checking
   const {
     data: cachedData,
     isLoading: isCacheLoading,
@@ -63,7 +86,7 @@ export const useFullScan = () => {
     staleTime: 30 * 60 * 1000, // 30 minutes - don't refetch if we have data
     gcTime: 60 * 60 * 1000, // Keep in cache for 1 hour
     retry: false, // Don't retry 404s
-    refetchOnMount: false, // Don't refetch if we already have data
+    refetchOnMount: 'always', // Always try to load cache on mount if enabled
     enabled: shouldFetchCachedFullScan,
   });
 
@@ -243,6 +266,16 @@ export const useFullScan = () => {
     return startScanMutation.mutateAsync();
   };
 
+  // Compute staleness information from cache status
+  const isCacheStale = cacheStatus?.is_stale ?? false;
+  const cacheAgeFormatted = useMemo(
+    () => formatCacheAge(cacheStatus?.age_seconds),
+    [cacheStatus?.age_seconds]
+  );
+
+  // Determine if cache is from a current session or loaded from disk
+  const isFromCache = result === cachedResult && !progress?.result;
+
   return {
     scanId,
     progress: progress || null,
@@ -253,7 +286,7 @@ export const useFullScan = () => {
     startScan,
     dataUpdatedAt: effectiveDataUpdatedAt, // For cache status indicators
     timing, // Performance timing information
-    isFromCache: result === cachedResult && !progress?.result, // Indicates if showing cached data
+    isFromCache, // Indicates if showing cached data
     cacheStatus: cacheStatus || null,
     // Cache hydration progress flags
     isCheckingCacheStatus: isCacheStatusLoading,
@@ -261,5 +294,8 @@ export const useFullScan = () => {
     isValidatingCache: isValidatingCache,
     cacheWarning, // Warning message if cache is invalid/expired
     cacheValidationStatus: validationStatus || null,
+    // Staleness information (7-day threshold)
+    isCacheStale, // True if cache is older than 7 days
+    cacheAgeFormatted, // Human-readable age like "3 days" or "2 hours"
   };
 };

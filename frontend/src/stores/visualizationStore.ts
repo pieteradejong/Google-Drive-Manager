@@ -24,6 +24,7 @@ export type ExperimentType =
   | 'semantic-analysis'
   | 'age-semantic'
   | 'type-semantic'
+  | 'stale-files'
   | 'dag'
   | 'list';
 

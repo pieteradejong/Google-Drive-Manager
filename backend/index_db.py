@@ -23,7 +23,7 @@ db_logger = PerformanceLogger("index_db")
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "data" / "drive_index.db"
 
 # Schema version for migrations
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2  # Bumped for dag_nodes and dag_meta tables
 
 
 def get_db_path() -> Path:
@@ -119,6 +119,29 @@ def init_db(db_path: Optional[Path] = None) -> None:
         """
         )
 
+        # DAG metadata table for storing computation info
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dag_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """
+        )
+
+        # DAG nodes table for pre-computed node properties
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS dag_nodes (
+                id TEXT PRIMARY KEY,
+                depth INTEGER NOT NULL DEFAULT 0,
+                is_root INTEGER NOT NULL DEFAULT 0,
+                children_count INTEGER NOT NULL DEFAULT 0,
+                topo_order INTEGER
+            )
+        """
+        )
+
         # Create indexes for common queries
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_files_md5_size ON files(md5, size)"
@@ -134,6 +157,17 @@ def init_db(db_path: Optional[Path] = None) -> None:
         )
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_parents_child ON parents(child_id)"
+        )
+
+        # DAG-specific indexes
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dag_nodes_depth ON dag_nodes(depth)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dag_nodes_root ON dag_nodes(is_root)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dag_nodes_topo ON dag_nodes(topo_order)"
         )
 
         # Store schema version
@@ -374,6 +408,8 @@ def clear_database(db_path: Optional[Path] = None) -> None:
         cursor.execute("DELETE FROM parents")
         cursor.execute("DELETE FROM files")
         cursor.execute("DELETE FROM file_errors")
+        cursor.execute("DELETE FROM dag_nodes")
+        cursor.execute("DELETE FROM dag_meta")
         # Keep schema_version in sync_state
         cursor.execute("DELETE FROM sync_state WHERE key != 'schema_version'")
         conn.commit()
@@ -394,3 +430,101 @@ def database_exists(db_path: Optional[Path] = None) -> bool:
             return row is not None
     except Exception:
         return False
+
+
+# =============================================================================
+# DAG-specific functions
+# =============================================================================
+
+
+def get_dag_meta(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    """Get a value from dag_meta table."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM dag_meta WHERE key = ?", (key,))
+    row = cursor.fetchone()
+    return row["value"] if row else None
+
+
+def set_dag_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Set a value in dag_meta table."""
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO dag_meta (key, value) VALUES (?, ?)", (key, value)
+    )
+
+
+def clear_dag_data(conn: sqlite3.Connection) -> None:
+    """Clear all DAG data (before recomputation)."""
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM dag_nodes")
+    cursor.execute("DELETE FROM dag_meta")
+
+
+def upsert_dag_node(
+    conn: sqlite3.Connection,
+    node_id: str,
+    depth: int,
+    is_root: bool,
+    children_count: int,
+    topo_order: Optional[int] = None,
+) -> None:
+    """Insert or update a DAG node record."""
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO dag_nodes (id, depth, is_root, children_count, topo_order)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            depth = excluded.depth,
+            is_root = excluded.is_root,
+            children_count = excluded.children_count,
+            topo_order = excluded.topo_order
+        """,
+        (node_id, depth, 1 if is_root else 0, children_count, topo_order),
+    )
+
+
+def get_dag_node(conn: sqlite3.Connection, node_id: str) -> Optional[Dict[str, Any]]:
+    """Get a DAG node by ID."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM dag_nodes WHERE id = ?", (node_id,))
+    row = cursor.fetchone()
+    return dict(row) if row else None
+
+
+def get_dag_roots(conn: sqlite3.Connection) -> List[str]:
+    """Get all root node IDs from DAG."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM dag_nodes WHERE is_root = 1 ORDER BY topo_order")
+    return [row["id"] for row in cursor.fetchall()]
+
+
+def get_dag_nodes_by_topo_order(
+    conn: sqlite3.Connection, limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """Get DAG nodes ordered by topological order."""
+    cursor = conn.cursor()
+    sql = "SELECT * FROM dag_nodes ORDER BY topo_order"
+    if limit:
+        sql += f" LIMIT {limit}"
+    cursor.execute(sql)
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def dag_exists(db_path: Optional[Path] = None) -> bool:
+    """Check if DAG data exists in the database."""
+    try:
+        with get_connection(db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) as count FROM dag_nodes")
+            count = cursor.fetchone()["count"]
+            return count > 0
+    except Exception:
+        return False
+
+
+def get_all_edges(conn: sqlite3.Connection) -> List[Tuple[str, str]]:
+    """Get all parent-child edges from the parents table."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT parent_id, child_id FROM parents")
+    return [(row["parent_id"], row["child_id"]) for row in cursor.fetchall()]
